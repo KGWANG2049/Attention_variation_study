@@ -635,7 +635,8 @@ class ShapeNetModel(nn.Module):
                  v_in, v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
         super(ShapeNetModel, self).__init__()
-        self.Point_Embedding = Point_Embedding(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out)
+        self.Point_Embedding = Point_Embedding(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in,
+                                               point_emb2_out)
         self.CrossAttentionMS_list = nn.ModuleList(
             [CrossAttentionMS(K, scale, neighbor_selection_method, neighbor_type, shared_ca,
                               concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
