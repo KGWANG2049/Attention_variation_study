@@ -13,6 +13,9 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.cuda import amp
 import numpy as np
+from torchsummary import summary
+from thop import profile, clever_format
+
 
 
 @hydra.main(version_base=None, config_path="./configs", config_name="default.yaml")
@@ -123,11 +126,13 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
     else:
         raise ValueError('Not implemented!')
 
+
     # get sampler
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
     validation_sampler = torch.utils.data.distributed.DistributedSampler(validation_set)
     trainval_sampler = torch.utils.data.distributed.DistributedSampler(trainval_set)
     test_sampler = torch.utils.data.distributed.DistributedSampler(test_set)
+
 
     # get dataloader
     train_loader = torch.utils.data.DataLoader(train_set, config.train.dataloader.batch_size_per_gpu,
@@ -154,6 +159,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
         train_sampler = trainval_sampler
         train_loader = trainval_loader
         validation_loader = test_loader
+
     my_model = shapenet_model_new.ShapeNetModel(config['Point_Embedding']['embedding_k'],
                                                 config['Point_Embedding']['point_emb1_in'],
                                                 config['Point_Embedding']['point_emb1_out'],
@@ -177,33 +183,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                                                 config['CrossAttentionMS']['ff_conv1_channels_out'],
                                                 config['CrossAttentionMS']['ff_conv2_channels_in'],
                                                 config['CrossAttentionMS']['ff_conv2_channels_out'])
-    """
-    # get model
-    my_model = shapenet_model_new.ShapeNetModel(config.point_emb1_in,
-                                                config.point_emb1_out,
-                                                config.point_emb2_in,
-                                                config.point_emb2_out,
-                                                config.point_emb_K,
-                                                config.K,
-                                                config.scale,
-                                                config.neighbor_selection_method,
-                                                config.neighbor_type,
-                                                config.shared_ca,
-                                                config.concat_ms_inputs,
-                                                config.mlp_or_ca,
-                                                config.q_in,
-                                                config.q_out,
-                                                config.k_in,
-                                                config.k_out,
-                                                config.v_in,
-                                                config.v_out,
-                                                config.num_heads,
-                                                config.ff_conv1_channels_in,
-                                                config.ff_conv1_channels_out,
-                                                config.ff_conv2_channels_in,
-                                                config.ff_conv2_channels_out
-                                                )
-    """
+
     # synchronize bn among gpus
     if config.train.ddp.syn_bn:  # TODO: test performance
         my_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(my_model)
@@ -539,6 +519,14 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
             if rank == 0:
                 kbar.update(i + 1, values=[('lr', current_lr), ('train_loss', train_loss), ('train_mIoU', train_miou)])
 
+    # get num_para and Flops
+    model = my_model
+    summary(model, input_size=samples.shape[1:])
+    macs, params = profile(model, inputs=(samples,))
+    macs, params = clever_format([macs, params], "%.3f")
+    print('FLOPs: ', macs)
+    print('Params: ', params)
+
     # save artifacts to wandb server
     if config.wandb.enable and rank == 0:
         artifacts = wandb.Artifact(config.wandb.name, type='runs')
@@ -554,6 +542,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
         artifacts.add_file(f'/tmp/{run.id}_train_shapenet.py', name='train_shapenet.py')
         artifacts.add_file(f'/tmp/{run.id}_test_shapenet.py', name='test_shapenet.py')
         artifacts.add_file(f'/tmp/{run.id}_checkpoint.pt', name='checkpoint.pt')
+        wandb.log({'FLOPs': macs, 'Params': params})
         run.log_artifact(artifacts)
         wandb.finish(quiet=True)
 
