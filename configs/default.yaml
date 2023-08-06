@@ -1,3 +1,18 @@
+hydra:
+  output_subdir: null  # disable creating .hydra directory
+  run:
+    dir: .  # disable output directory created by hydra
+  job:
+    chdir: false  # disable changing working directory
+
+usr_config: null  # e.g. project_root/configs/user_configs/user_config1.yaml
+
+defaults:
+  - _self_  # import default.yaml itself
+  - datasets: ???  # import dataset
+  - override hydra/hydra_logging: disabled   # disable hydra logging because we will use wandb as our logger
+  - override hydra/job_logging: disabled   # disable job logging because we will use wandb as our logger
+
 
 
 ################### Don't modify parameters above #######################
@@ -12,8 +27,8 @@ wandb:
   name: ma_test  # the name your run
 
 train:  # only valid when running the training script
-  epochs: 200
-  lr: 0.1
+  epochs: 3
+  lr: 0.05
   lr_scheduler:
     enable: true
     which: cosLR  # expLR, stepLR, cosLR or cos_warmupLR
@@ -77,7 +92,7 @@ train:  # only valid when running the training script
     world_size: 1  # this is equal to 'nproc_this_node' if you only use one PC
   amp: true  # whether to use automatic mixed precision
   grad_clip:
-    enable: false
+    enable: true
     mode: value  # clip by value or by norm
     max_norm: 1e-2
     value: 1e-2
@@ -125,7 +140,7 @@ Point_Embedding:
   embedding_k: 32
   point_emb1_in: 6
   point_emb1_out: 64
-  point_emb2_in: 64
+  point_emb2_in: 128
   point_emb2_out: 128
 
 CrossAttentionMS:

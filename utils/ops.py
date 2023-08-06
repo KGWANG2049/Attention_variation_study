@@ -154,7 +154,7 @@ def select_neighbors_in_one_key(pcd, coordinate, K, scale, neighbor_selection_me
             f'neighbor_selection_method should be coordinate or feature, but got {neighbor_selection_method}')
     neighbors = []
     idx_all = []
-    for i in range(scale):
+    for i in range(scale+1):
         neighbor = index_points(pcd, idx)[:, :, K * (2 ** scale - 1):K * (2 ** (scale + 1) - 1):2 ** scale, :]
         # neighbor.shape == (B, N, K, C)
         idx = idx[:, :, K * (2 ** scale - 1):K * (2 ** (scale + 1) - 1):2 ** scale]
