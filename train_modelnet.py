@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 import pkbar
 import wandb
+from thop import profile
 from utils import metrics, debug
 import os
 import torch.multiprocessing as mp
@@ -467,6 +468,8 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
         artifacts.add_file(f'/tmp/{run.id}_train_modelnet.py', name='train_modelnet.py')
         artifacts.add_file(f'/tmp/{run.id}_test_modelnet.py', name='test_modelnet.py')
         artifacts.add_file(f'/tmp/{run.id}_checkpoint.pt', name='checkpoint.pt')
+        flops, params = profile(my_model, inputs=(samples,))
+        wandb.log({"Total FLOPs": flops, "Total Parameter": params})
         run.log_artifact(artifacts)
         wandb.finish(quiet=True)
 
