@@ -277,8 +277,8 @@ class CrossAttention(nn.Module):
         self.p_cat = nn.Parameter(torch.ones(1, 2 * self.k_depth))  # q.shape == (1, 2D)
         """
         self.c_type_conv = nn.Conv2d(k_in, k_out, 1, bias=False)
-        #self.two_c_type_conv = nn.Conv2d(2 * k_in, k_out, 1, bias=False)
-        #self.three_c_type_conv = nn.Conv2d(3 * k_in, k_out, 1, bias=False)
+        # self.two_c_type_conv = nn.Conv2d(2 * k_in, k_out, 1, bias=False)
+        # self.three_c_type_conv = nn.Conv2d(3 * k_in, k_out, 1, bias=False)
         """
         self.dot_linear_energy = nn.Linear(3, num_heads)
         self.sub_linear_energy = nn.Linear(3, q_out)
@@ -287,6 +287,7 @@ class CrossAttention(nn.Module):
         self.linear_k = nn.Linear(3, k_out)
         self.linear_v = nn.Linear(3, v_out)
         """
+
     """   
     name, param.grad module.CrossAttentionMS_list.0.ca.p_add None
     name, param.grad module.CrossAttentionMS_list.0.ca.p_cat None
@@ -302,6 +303,7 @@ class CrossAttention(nn.Module):
     name, param.grad module.CrossAttentionMS_list.0.ca.linear_v.weight None
     name, param.grad module.CrossAttentionMS_list.0.ca.linear_v.bias None
     """
+
     def forward(self, pcd, neighbors):
         # pcd.shape == (B, C, N)
         pcd = pcd[:, :, :, None]  # pcd.shape == (B, C, N, 1)
@@ -396,6 +398,8 @@ class CrossAttention(nn.Module):
         x = x.permute(0, 1, 3, 4, 2)
         # x.shape == (B, H, N, K, D)
         return x
+
+
 """
     def pe_sub_energy(self, coordinates, trans_value):
         # coordinates.shape == (B, 3, N, K)
@@ -472,13 +476,16 @@ class CrossAttention(nn.Module):
         return pos_trans_value
     """
 
+
 #  multi_scale as separate keys
 class CrossAttentionMS(nn.Module):
-    def __init__(self, K, scale, neighbor_selection_method, neighbor_type, shared_ca, concat_ms_inputs, mlp_or_ca,
+    def __init__(self, key_one_or_sep, K, scale, neighbor_selection_method, neighbor_type, shared_ca, concat_ms_inputs,
+                 mlp_or_ca,
                  q_in, q_out, k_in, k_out, v_in,
                  v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
         super(CrossAttentionMS, self).__init__()
+        self.key_one_or_sep = key_one_or_sep
         self.K = K
         self.scale = scale
         self.neighbor_selection_method = neighbor_selection_method
@@ -522,12 +529,22 @@ class CrossAttentionMS(nn.Module):
                              f'center_neighbor_diff, neighbor or diff, but got {neighbor_type}')
 
     def forward(self, pcd, coordinate):
-        neighbor_list, idx_all = ops.select_neighbors_in_one_key(pcd, coordinate, self.K, self.scale,
+        if self.key_one_or_sep == 'one':
+            neighbors, idx_all = ops.select_neighbors_in_one_key(pcd, coordinate, self.K, self.scale,
                                                                  self.neighbor_selection_method, self.neighbor_type)
+            neighbors = self.mlp(neighbors.permute(0, 3, 1, 2))  # neighbor_list.shape == (B, C, N, K)
+        elif self.key_one_or_sep == 'sep':
+            neighbors, idx_all = ops.select_neighbors_in_separate_key(pcd, coordinate, self.K, self.scale,
+                                                                      self.neighbor_selection_method,
+                                                                      self.neighbor_type)
+            neighbors = self.mlp(neighbors.permute(0, 3, 1, 2))  # neighbor_list.shape == (B, C, N, K)
+            neighbor_list = ops.list_generator(neighbors, self.K, self.scale)
+            # print("neighbor_list", neighbor_list.shape)
         # neighbor_list.shape == (B, N, K, num x C)
-        neighbor_list = self.mlp(neighbor_list.permute(0, 3, 1, 2))  # neighbor_list.shape == (B, C, N, K)
+
+        # print("neighbor_list", neighbor_list.shape)
         if self.concat_ms_inputs:
-            neighbors = torch.cat([neighbor_list], dim=1)
+            neighbors = torch.cat([neighbors], dim=1)
             x_out = self.ca(pcd, neighbors)
         else:
             x_output_list = []
@@ -540,11 +557,13 @@ class CrossAttentionMS(nn.Module):
             else:
                 for neighbors, ca in zip(neighbor_list, self.ca_list):
                     # x.shape == (B, C, N)  neighbors.shape == (B, C, N, K)
+                    print("neighbors", neighbors.shape)
                     x_out = ca(pcd, neighbors)
+
                     # x_out.shape == (B, C, N)
                     x_output_list.append(x_out)
             if self.mlp_or_ca == 'mlp':
-                x_out = torch.concat(x_output_list, dim=1)
+                x_out = torch.cat(x_output_list, dim=1)
                 # x_out.shape == (B, C, N)
                 x_out = self.linear(x_out)
                 # x_out.shape == (B, C, N)
@@ -665,7 +684,7 @@ class Point_Embedding(nn.Module):
 
 
 class ModelNetModel(nn.Module):
-    def __init__(self, embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out,
+    def __init__(self, embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out, key_one_or_sep,
                  K, scale, neighbor_selection_method, neighbor_type, shared_ca,
                  concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
                  v_in, v_out, num_heads, ff_conv1_channels_in,
@@ -674,15 +693,15 @@ class ModelNetModel(nn.Module):
         self.Point_Embedding = Point_Embedding(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in,
                                                point_emb2_out)
         self.CrossAttentionMS_list = nn.ModuleList(
-            [CrossAttentionMS(K, scale, neighbor_selection_method, neighbor_type, shared_ca,
+            [CrossAttentionMS(key_one_or_sep, K, scale, neighbor_selection_method, neighbor_type, shared_ca,
                               concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
                               v_in, v_out, num_heads, ff_conv1_channels_in,
                               ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out) for
-             K, scale, neighbor_selection_method, neighbor_type, shared_ca,
+             key_one_or_sep, K, scale, neighbor_selection_method, neighbor_type, shared_ca,
              concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
              v_in, v_out, num_heads, ff_conv1_channels_in,
              ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out in
-             zip(K, scale, neighbor_selection_method, neighbor_type, shared_ca,
+             zip(key_one_or_sep, K, scale, neighbor_selection_method, neighbor_type, shared_ca,
                  concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
                  v_in, v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out)])
@@ -707,6 +726,3 @@ class ModelNetModel(nn.Module):
         x = self.fc(x)
 
         return x
-
-
-

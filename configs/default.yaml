@@ -144,6 +144,7 @@ Point_Embedding:
   point_emb2_out: 128
 
 CrossAttentionMS:
+  key_one_or_sep: ['sep', 'sep', 'sep', 'sep']
   K: [32, 32, 32, 32]
   scale: [0, 0, 0, 0]
   neighbor_selection_method: ['feature', 'feature', 'feature', 'feature']
