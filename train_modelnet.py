@@ -7,14 +7,16 @@ from pathlib import Path
 import torch
 import pkbar
 import wandb
-from thop import profile
 from utils import metrics, debug
-import os
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.cuda import amp
 import numpy as np
 from utils.loss import consistency_loss
+from ptflops import get_model_complexity_info
+import os
+import io
+import sys
 
 
 @hydra.main(version_base=None, config_path="./configs", config_name="default.yaml")
@@ -160,6 +162,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                                             config['Point_Embedding']['point_emb1_out'],
                                             config['Point_Embedding']['point_emb2_in'],
                                             config['Point_Embedding']['point_emb2_out'],
+                                            config['CrossAttentionMS']['key_one_or_sep'],
                                             config['CrossAttentionMS']['K'],
                                             config['CrossAttentionMS']['scale'],
                                             config['CrossAttentionMS']['neighbor_selection_method'],
@@ -187,8 +190,14 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
     my_model = my_model.to(device)
     my_model = torch.nn.parallel.DistributedDataParallel(my_model)
     # find_unused_parameters = True
-
-
+    """
+    # get num_paras and FLOPS
+    checkpoints = my_model
+    model = torch.load(checkpoints)
+    model_name = 'att_var'
+    flops, params = get_model_complexity_info(model, (3, 2048), as_strings=True, print_per_layer_stat=True)
+    print("%s |%s |%s" % (model_name, flops, params))
+    """
     # add fp hook and bp hook
     if config.train.debug.enable:
         if len(config.train.ddp.which_gpu) > 1:
@@ -468,10 +477,27 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
         artifacts.add_file(f'/tmp/{run.id}_train_modelnet.py', name='train_modelnet.py')
         artifacts.add_file(f'/tmp/{run.id}_test_modelnet.py', name='test_modelnet.py')
         artifacts.add_file(f'/tmp/{run.id}_checkpoint.pt', name='checkpoint.pt')
-        flops, params = profile(my_model, inputs=(samples,))
-        wandb.log({"Total FLOPs": flops, "Total Parameter": params})
         run.log_artifact(artifacts)
         wandb.finish(quiet=True)
+
+    original_stdout = sys.stdout
+    sys.stdout = buffer = io.StringIO()
+
+    # lops, params = get_model_complexity_info(my_model, (3, 2048), as_strings=True, print_per_layer_stat=True)
+
+    sys.stdout = original_stdout
+    output = buffer.getvalue()
+
+    filename = f'saved_model/model_info_{run.id}.txt'
+
+    with open(filename, 'w') as f:
+        f.write(output)
+        f.write('\n')
+        f.write(f'LOPs: {get_model_complexity_info(my_model, (3, 2048), as_strings=True, print_per_layer_stat=True)}\n')
+
+    save_dir = "saved_model"
+    save_path = os.path.join(save_dir, f"model_{run.id}.pth")
+    torch.save(my_model.state_dict(), save_path)
 
 
 if __name__ == '__main__':
