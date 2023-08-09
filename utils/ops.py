@@ -13,7 +13,7 @@ def index_points(points, idx):
     return res.view(*raw_shape, -1)
 
 
-def     knn(a, b, k):
+def     knn(a, b, K):
     """
     :param a: a.shape == (B, N, C)
     :param b: b.shape == (B, M, C)
@@ -24,7 +24,7 @@ def     knn(a, b, k):
     bb = torch.sum(b ** 2, dim=2, keepdim=True)  # bb.shape == (B, M, 1)
     # TODO: some values inside pairwise_distance is positive
     pairwise_distance = -aa - inner - bb.transpose(2, 1)  # pairwise_distance.shape == (B, N, M)
-    idx = pairwise_distance.topk(k=k, dim=-1)[1]  # idx.shape == (B, N, K)
+    idx = pairwise_distance.topk(k=K, dim=-1)[1]  # idx.shape == (B, N, K)
     return idx
 
 
@@ -56,7 +56,7 @@ def fps(x, n_samples):
     return output
 
 
-def extract_patches(x, centers, k):
+def extract_patches(x, centers, K):
     """
     Extract patches around centers
     :param x: pointcloud, tensor of shape (B, N, C)
@@ -72,7 +72,7 @@ def extract_patches(x, centers, k):
 
     for i in range(n_samples):
         centroid = x[batch_indices, centers[:, i], :].view(B, 1, C)
-        idx = knn(centroid, x, k)
+        idx = knn(centroid, x, K)
         patch = index_points(x, idx)
         patches.append(patch)
 
@@ -146,21 +146,26 @@ def select_neighbors_in_one_key(pcd, coordinate, K, scale, neighbor_selection_me
     # K = K * (2 ** scale - 1)  # total number of neighbors
 
     if neighbor_selection_method == 'coordinate':
-        idx = knn(coordinate, coordinate, K)  # idx.shape == (B, N, K)
+        idx = knn(coordinate, coordinate, K * (2 ** (scale + 1) - 1))  # idx.shape == (B, N, K)
     elif neighbor_selection_method == 'feature':
-        idx = knn(pcd, pcd, K)  # idx.shape == (B, N, K)
+        idx = knn(pcd, pcd, K * (2 ** (scale + 1) - 1))  # idx.shape == (B, N, K)
     else:
         raise ValueError(
             f'neighbor_selection_method should be coordinate or feature, but got {neighbor_selection_method}')
     neighbors = []
     idx_all = []
     for i in range(scale+1):
-        neighbor = index_points(pcd, idx)[:, :, K * (2 ** scale - 1):K * (2 ** (scale + 1) - 1):2 ** scale, :]
+        start_idx = K * (2 ** i - 1)
+        end_idx = K * (2 ** (i + 1) - 1)
+        step = 2 ** i
+        neighbor = index_points(pcd, idx)[:, :, start_idx:end_idx:step, :]
+        #print("neighbor.shape", neighbor.shape)
         # neighbor.shape == (B, N, K, C)
-        idx = idx[:, :, K * (2 ** scale - 1):K * (2 ** (scale + 1) - 1):2 ** scale]
+        part_idx = idx[:, :, start_idx:end_idx:step]
         neighbors.append(neighbor)
-        idx_all.append(idx)
+        idx_all.append(part_idx)
     neighbors = torch.cat(neighbors, dim=2)  # neighbors.shape == (B, N, K, C)
+    # print("neighbors shape:", neighbors.shape)
     idx_all = torch.cat(idx_all, dim=2)
 
     if neighbor_type == 'neighbor':
@@ -186,6 +191,70 @@ def select_neighbors_in_one_key(pcd, coordinate, K, scale, neighbor_selection_me
                          f'"neighbor_diff", "center_neighbor_diff" but got {neighbor_type}')
 
     return output, idx_all
+
+
+def select_neighbors_in_separate_key(pcd, coordinate, K, scale, neighbor_selection_method, neighbor_type):
+    pcd = pcd.permute(0, 2, 1)  # pcd.shape == (B, N, C)
+    coordinate = coordinate.permute(0, 2, 1)  # coordinate.shape == (B, N, C)
+
+    if neighbor_selection_method == 'coordinate':
+        idx = knn(coordinate, coordinate, K * (2 ** scale))  # idx.shape == (B, N, K)
+    elif neighbor_selection_method == 'feature':
+        idx = knn(pcd, pcd, K * (2 ** scale))  # idx.shape == (B, N, K)
+    else:
+        raise ValueError(
+            f'neighbor_selection_method should be coordinate or feature, but got {neighbor_selection_method}')
+
+    neighbor_list = []
+    idx_all = []
+    for i in range(scale + 1):
+        start_idx = 0
+        end_idx = K * (2 ** scale)
+        step = 2 ** scale
+        neighbors = index_points(pcd, idx)[:, :, start_idx:end_idx:step, :]
+        # print("neighbor.shape", neighbor.shape)
+        # neighbor.shape == (B, N, K, C)
+        part_idx = idx[:, :, start_idx:end_idx:step]
+        neighbor_list.append(neighbors)
+        idx_all.append(part_idx)
+        # neighbors.shape == (B, N, K, C)
+        # print("neighbors shape:", neighbors.shape)
+    neighbors = torch.cat(neighbor_list, dim=2)  # neighbors.shape == (B, N, K, C)
+    # print("neighbors shape:", neighbors.shape)
+    idx_all = torch.cat(idx_all, dim=2)
+
+    if neighbor_type == 'neighbor':
+        output = neighbors  # output.shape == (B, N, K, C)
+    elif neighbor_type == 'diff':
+        # pcd = index_points(pcd, idx_all)
+        diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
+        output = diff  # output.shape == (B, N, K, C)
+    elif neighbor_type == 'center_neighbor':
+        output = torch.cat([pcd[:, :, None, :], neighbors], dim=3)  # output.shape == (B, N, K, 2C)
+    elif neighbor_type == 'center_diff':
+        diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
+        output = torch.cat([pcd[:, :, None, :], diff], dim=3)  # output.shape == (B, N, K, 2C)
+    elif neighbor_type == 'neighbor_diff':
+        output = torch.cat([neighbors, neighbors - pcd[:, :, None, :]])
+        # output.shape == (B, N, K, 2C)
+    elif neighbor_type == 'center_neighbor_diff':
+        diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
+        output = torch.cat([pcd[:, :, None, :], neighbors, diff], dim=3)
+        # output.shape == (B, N, K, 3C)
+    else:
+        raise ValueError(f'group_type should be "neighbor", "diff", "center_neighbor", "center_diff", '
+                         f'"neighbor_diff", "center_neighbor_diff" but got {neighbor_type}')
+
+    return output, idx_all
+
+def list_generator(neighbors, K, scale):
+    sliced_tensors = []
+    for i in range(scale + 1):
+        start_idx = i * K
+        end_idx = start_idx + K
+        sliced_tensor = neighbors[:, :, :, start_idx:end_idx]
+        sliced_tensors.append(sliced_tensor)
+    return sliced_tensors
 
 
 def operation_mode(operation_mode, query, keys):
