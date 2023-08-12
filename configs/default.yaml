@@ -137,14 +137,12 @@ test:  # only valid when running the test script
 # embedding -> neighbor2point -> downsample -> neighbor2point -> downsample -> neighbor2point
 #                             -> upsample -> neighbor2point -> upsample.-> neighbor2point
 Point_Embedding:
-  embedding_k: 32
-  point_emb1_in: 6
-  point_emb1_out: 64
-  point_emb2_in: 128
-  point_emb2_out: 128
+  embedding_k: [32, 32]
+  point_emb1_in: [3, 128]
+  point_emb1_out: [128, 128]
 
 CrossAttentionMS:
-  key_one_or_sep: ['sep', 'sep', 'sep', 'sep']
+  key_one_or_sep: ['one', 'one', 'one', 'one']
   K: [32, 32, 32, 32]
   scale: [0, 0, 0, 0]
   neighbor_selection_method: ['feature', 'feature', 'feature', 'feature']
@@ -152,15 +150,15 @@ CrossAttentionMS:
   shared_ca: [True, True, True, True]
   concat_ms_inputs: [True, True, True, True]
   mlp_or_ca: ['ca', 'ca', 'ca', 'ca']
-  q_in: [128, 128, 128, 128]
-  q_out: [128, 128, 128, 128]
-  k_in: [128, 128, 128, 128]
-  k_out: [128, 128, 128, 128]
-  v_in: [128, 128, 128, 128]
-  v_out: [128, 128, 128, 128]
-  num_heads: [4, 4, 4, 4]
-  ff_conv1_channels_in: [128, 128, 128, 128]
-  ff_conv1_channels_out: [128, 128, 128, 128]
-  ff_conv2_channels_in: [128, 128, 128, 128]
-  ff_conv2_channels_out: [128, 128, 128, 128]
+  q_in: [256, 256, 256, 256]
+  q_out: [256, 256, 256, 256]
+  k_in: [256, 256, 256, 256]
+  k_out: [256, 256, 256, 256]
+  v_in: [256, 256, 256, 256]
+  v_out: [256, 256, 256, 256]
+  num_heads: [8, 8, 8, 8]
+  ff_conv1_channels_in: [256, 256, 256, 256]
+  ff_conv1_channels_out: [256, 256, 256, 256]
+  ff_conv2_channels_in: [256, 256, 256, 256]
+  ff_conv2_channels_out: [256, 256, 256, 256]
 
