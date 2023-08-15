@@ -160,6 +160,8 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
     my_model = modelnet_model.ModelNetModel(config['Point_Embedding']['embedding_k'],
                                             config['Point_Embedding']['point_emb1_in'],
                                             config['Point_Embedding']['point_emb1_out'],
+                                            config['Point_Embedding']['point_emb2_in'],
+                                            config['Point_Embedding']['point_emb2_out'],
                                             config['CrossAttentionMS']['key_one_or_sep'],
                                             config['CrossAttentionMS']['K'],
                                             config['CrossAttentionMS']['scale'],
@@ -292,10 +294,9 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
             optimizer.zero_grad()
             samples, cls_labels = samples.to(device), cls_labels.to(device)
             if config.train.amp:
-                with (amp.autocast()):
+                with amp.autocast():
                     preds = my_model(samples)
                     train_loss = loss_fn(preds, cls_labels)
-                    # + config.train.consistency_loss_factor * consistency_loss(my_model.module.res_link_list)
                 scaler.scale(train_loss).backward()
                 # log debug information
                 if config.train.debug.enable:
@@ -459,11 +460,9 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
         if param.requires_grad:
             print("name, param.grad", name, param.grad)
     """
-
-
+    
     original_stdout = sys.stdout
     sys.stdout = buffer = io.StringIO()
-    # lops, params = get_model_complexity_info(my_model, (3, 2048), as_strings=True, print_per_layer_stat=True)
     sys.stdout = original_stdout
     output = buffer.getvalue()
     filename = f'saved_model/model_info_{run.id}.txt'
@@ -475,7 +474,6 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
     save_dir = "saved_model"
     save_path = os.path.join(save_dir, f"model_{run.id}.pth")
     torch.save(my_model.state_dict(), save_path)
-
 
     # save artifacts to wandb server
     if config.wandb.enable and rank == 0:

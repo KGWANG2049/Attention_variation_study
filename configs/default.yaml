@@ -27,8 +27,8 @@ wandb:
   name: ma_test  # the name your run
 
 train:  # only valid when running the training script
-  epochs: 1
-  lr: 0.05
+  epochs: 200
+  lr: 1e-3
   lr_scheduler:
     enable: true
     which: cosLR  # expLR, stepLR, cosLR or cos_warmupLR
@@ -39,7 +39,7 @@ train:  # only valid when running the training script
       decay_step: 50
     cosLR:
       T_max: ${train.epochs}  # maximum epochs
-      eta_min: 1e-3  # minimum lr
+      eta_min: 1e-5  # minimum lr
     cos_warmupLR:
       warmup_epochs: 10  # number of epochs the warmup process takes
       warmup_init_lr: ${train.lr_scheduler.cos_warmupLR.eta_min}  # initial warmup lr
@@ -47,7 +47,7 @@ train:  # only valid when running the training script
       eta_min: 1e-6  # minimum lr of cosine annealing process
   optimizer:
     which: sgd  # adamw or sgd
-    weight_decay: 1e-4
+    weight_decay: 1e-5
   consistency_loss_factor: 1  # only valid when training modelnet model
   validation_freq: 1  # frequency in epoch(s) to validate the model
   label_smoothing: true
@@ -82,14 +82,14 @@ train:  # only valid when running the training script
         y_range: [0.66, 1.5]
         z_range: [0.66, 1.5]
   ddp:
-    which_gpu: [0]
+    which_gpu: [0, 1, 2, 3]
     syn_bn: true  # synchronize batch normalization among gpus
     master_addr: localhost  # don't change this if you use only one PC
     master_port: 12345  # please choose an available port
     nnodes: 1  # how many PCs you want to use
-    nproc_this_node: 1  # how many gpu you want to use in current PC, should match 'which_gpu'
+    nproc_this_node: 4  # how many gpu you want to use in current PC, should match 'which_gpu'
     rank_starts_from: 0  # don't change this if you use only one PC
-    world_size: 1  # this is equal to 'nproc_this_node' if you only use one PC
+    world_size: 4  # this is equal to 'nproc_this_node' if you only use one PC
   amp: true  # whether to use automatic mixed precision
   grad_clip:
     enable: true
@@ -114,13 +114,13 @@ test:  # only valid when running the test script
     prefetch: ${test.dataloader.batch_size_per_gpu}  # samples to be prefetched. e.g. 64 means 64*num_workers samples to be prefetched
     pin_memory: true  # pin memory in RAM
   ddp:
-    which_gpu: [0]
+    which_gpu: [0, 1, 2, 3]
     master_addr: localhost  # don't change this if you use only one PC
     master_port: 12345  # please choose an available port
     nnodes: 1  # how many PCs you want to use
-    nproc_this_node: 1  # how many gpu you want to use in current PC, should match 'which_gpu'
+    nproc_this_node: 4  # how many gpu you want to use in current PC, should match 'which_gpu'
     rank_starts_from: 0  # don't change this if you use only one PC
-    world_size: 1  # this is equal to 'nproc_this_node' if you only use one PC
+    world_size: 4  # this is equal to 'nproc_this_node' if you only use one PC
   print_results: true
   visualize_preds:
     enable: false
@@ -138,7 +138,7 @@ test:  # only valid when running the test script
 #                             -> upsample -> neighbor2point -> upsample.-> neighbor2point
 Point_Embedding:
   embedding_k: [32, 32]
-  point_emb1_in: [3, 128]
+  point_emb1_in: [6, 256]
   point_emb1_out: [128, 128]
 
 CrossAttentionMS:
@@ -161,4 +161,3 @@ CrossAttentionMS:
   ff_conv1_channels_out: [256, 256, 256, 256]
   ff_conv2_channels_in: [256, 256, 256, 256]
   ff_conv2_channels_out: [256, 256, 256, 256]
-

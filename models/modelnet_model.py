@@ -282,7 +282,7 @@ class CrossAttention(nn.Module):
         """
         self.dot_linear_energy = nn.Linear(3, num_heads)
         self.sub_linear_energy = nn.Linear(3, q_out)
-        
+
         self.linear_q = nn.Linear(3, q_out)
         self.linear_k = nn.Linear(3, k_out)
         self.linear_v = nn.Linear(3, v_out)
@@ -651,11 +651,11 @@ class Point_Embedding(nn.Module):
         # print("neighbors shape:", neighbors.shape)
         diff = neighbors - a[:, :, None, :]  # diff.shape == (B, N, K, 3)
         # print("diff shape:", diff.shape)
-        #a_exp = a.unsqueeze(2).expand(-1, -1, self.embedding_k, -1)  # a_exp.shape == (B, N, K, 3)
+        a_exp = a.unsqueeze(2).expand(-1, -1, self.embedding_k, -1)  # a_exp.shape == (B, N, K, 3)
         # print("a_exp shape:", a_exp.shape)
-        #x = torch.cat([diff, a_exp], dim=3).permute(0, 3, 1, 2)  # x.shape == (B, 6, N, K)
-        #print("x after cat shape:", x.shape)
-        x = self.conv1(diff.permute(0, 3, 1, 2))  # x.shape == (B, C, N, K)
+        x = torch.cat([diff, a_exp], dim=3).permute(0, 3, 1, 2)  # x.shape == (B, 6, N, K)
+        # print("x after cat shape:", x.shape)
+        x = self.conv1(x)  # x.shape == (B, C, N, K)
         # print("x after conv1 shape:", x.shape)
         x, _ = x.max(dim=3)  # x.shape == (B, C, N)
         # print("x after max shape:", x.shape)
@@ -688,7 +688,12 @@ class ModelNetModel(nn.Module):
                  concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
                  v_in, v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out)])
-        self.fc = torch.nn.Linear(self.k_out * self.num_att_layer, 40)  # Initialize the linear layer in `__init__` method.
+        self.linear1 = nn.Sequential(nn.Linear(self.k_out * self.num_att_layer, 512), nn.BatchNorm1d(512),
+                                     nn.LeakyReLU(negative_slope=0.2))
+        self.linear2 = nn.Sequential(nn.Linear(512, 256), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
+        self.linear3 = nn.Linear(256, 40)
+        self.dp1 = nn.Dropout(p=0.5)
+        self.dp2 = nn.Dropout(p=0.5)
 
     def forward(self, x):
         device = x.device
@@ -709,6 +714,15 @@ class ModelNetModel(nn.Module):
             res_link_list.append(x)
             # print("x.shape == (B, C, N)", x.shape)
         x = torch.cat(res_link_list, dim=1)  # res_link_cat.shape == (B, len_config x C, N)
-        x = x.max(dim=-1)[0]
-        x = self.fc(x)
+        x = x.max(dim=-1)[0]  # x.shape == (B, len_config x C)
+        x = self.linear1(x)
+        # x.shape == (B, 512)
+        x = self.dp1(x)
+        # x.shape == (B, 512)
+        x = self.linear2(x)
+        # x.shape == (B, 256)
+        x = self.dp2(x)
+        # x.shape == (B, 256)
+        x = self.linear3(x)
+        # x.shape == (B, 40)
         return x
