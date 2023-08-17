@@ -1,4 +1,4 @@
-# APES: Attention-based Point Cloud Edge Sampling
+# Attention-based variation study
 
 <p>
 <a href="https://arxiv.org/pdf/2302.14673.pdf">
@@ -13,14 +13,6 @@
     <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" /></a>
 </p>
 
-# Copyright
-original article: Attention-Based Point Cloud Edge Sampling https://arxiv.org/pdf/2302.14673.pdf  
-
-Author: Chengzhi Wu, Junwei Zheng, Julius Pfrommer, Jurgen Beyerer  
-
-Code: The original code comes from Chengzhi Wu and Junwei Zheng, some minor modifications are made.   
-
-Another public version(for test and application): https://github.com/JunweiZheng93/APES#apes-attention-based-point-cloud-edge-sampling
 # Setup
 Python version: 3.9
 ```bash
