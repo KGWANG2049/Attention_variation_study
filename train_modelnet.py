@@ -330,8 +330,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                 scaler.update()
             else:
                 preds = my_model(samples)
-                train_loss = loss_fn(preds, cls_labels) + config.train.consistency_loss_factor * consistency_loss(
-                    my_model.module.res_link_list)
+                train_loss = loss_fn(preds, cls_labels)
                 train_loss.backward()
                 # log debug information
                 if config.train.debug.enable:
@@ -460,7 +459,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
         if param.requires_grad:
             print("name, param.grad", name, param.grad)
     """
-    
+
     original_stdout = sys.stdout
     sys.stdout = buffer = io.StringIO()
     sys.stdout = original_stdout
@@ -492,8 +491,6 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
         artifacts.add_file(f'/tmp/{run.id}_checkpoint.pt', name='checkpoint.pt')
         run.log_artifact(artifacts)
         wandb.finish(quiet=True)
-
-
 
 
 if __name__ == '__main__':
