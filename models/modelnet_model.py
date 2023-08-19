@@ -4,9 +4,9 @@ from utils import ops
 import math
 
 
-class Global_CrossAttention(nn.Module):
+class SelfAttention(nn.Module):
     def __init__(self, q_in=64, q_out=64, k_in=64, k_out=64, v_in=64, v_out=64, num_points=2048, num_heads=8):
-        super(Global_CrossAttention, self).__init__()
+        super(SelfAttention, self).__init__()
         # check input values
         if k_in != v_in:
             raise ValueError(f'k_in and v_in should be the same! Got k_in:{k_in}, v_in:{v_in}')
@@ -179,6 +179,7 @@ class Global_CrossAttention(nn.Module):
                 # attention.shape == (B, H, N, N)
                 x = (attention * v_context).permute(0, 2, 1, 3)
                 # x.shape == (B, N, H, D)
+
             else:
                 raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
 
@@ -493,6 +494,7 @@ class CrossAttentionMS(nn.Module):
         self.shared_ca = shared_ca
         self.concat_ms_inputs = concat_ms_inputs
         self.mlp_or_ca = mlp_or_ca
+
         if q_in != v_out:
             raise ValueError(f'q_in should be equal to v_out due to ResLink! Got q_in: {q_in}, v_out: {v_out}')
         if concat_ms_inputs:
@@ -557,7 +559,6 @@ class CrossAttentionMS(nn.Module):
                     # x.shape == (B, C, N)  neighbors.shape == (B, C, N, K)
                     print("neighbors", neighbors.shape)
                     x_out = ca(pcd, neighbors)
-
                     # x_out.shape == (B, C, N)
                     x_output_list.append(x_out)
             if self.mlp_or_ca == 'mlp':
@@ -567,7 +568,7 @@ class CrossAttentionMS(nn.Module):
                 # x_out.shape == (B, C, N)
             else:
                 neighbors = torch.stack(x_output_list, dim=-1)
-                # x.shape == (B, C, N)   neighbors.shape == (B, C, N, K=scale+1)
+                # x.shape == (B, C, N)   neighbors.shape == (B, C, N, scale+1)
                 x_out = self.ca_aggregation(pcd, neighbors)
                 # x_out.shape == (B, C, N)
         # x_out.shape == (B, C, N)
@@ -629,10 +630,13 @@ class CrossAttentionMS_OneK(nn.Module):
 
 
 class Point_Embedding(nn.Module):
-    def __init__(self, embedding_k, conv1_channel_in, conv1_channel_out):
+    def __init__(self, embedding_k, conv1_channel_in, conv1_channel_out, conv2_channel_in, conv2_channel_out):
         super(Point_Embedding, self).__init__()
         self.conv1 = nn.Sequential(nn.Conv2d(conv1_channel_in, conv1_channel_out, kernel_size=1, bias=False),
                                    nn.BatchNorm2d(conv1_channel_out),
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.conv2 = nn.Sequential(nn.Conv2d(conv2_channel_in, conv2_channel_out, kernel_size=1, bias=False),
+                                   nn.BatchNorm2d(conv2_channel_out),
                                    nn.LeakyReLU(negative_slope=0.2))
         self.embedding_k = embedding_k
 
@@ -656,6 +660,7 @@ class Point_Embedding(nn.Module):
         x = torch.cat([diff, a_exp], dim=3).permute(0, 3, 1, 2)  # x.shape == (B, 6, N, K)
         # print("x after cat shape:", x.shape)
         x = self.conv1(x)  # x.shape == (B, C, N, K)
+        x = self.conv2(x)  # x.shape == (B, C, N, K)
         # print("x after conv1 shape:", x.shape)
         x, _ = x.max(dim=3)  # x.shape == (B, C, N)
         # print("x after max shape:", x.shape)
@@ -663,7 +668,7 @@ class Point_Embedding(nn.Module):
 
 
 class ModelNetModel(nn.Module):
-    def __init__(self, embedding_k, point_emb1_in, point_emb1_out, key_one_or_sep,
+    def __init__(self, embedding_k, point_emb1_in, point_emb1_out, conv2_channel_in, conv2_channel_out, key_one_or_sep,
                  K, scale, neighbor_selection_method, neighbor_type, shared_ca,
                  concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
                  v_in, v_out, num_heads, ff_conv1_channels_in,
@@ -672,9 +677,9 @@ class ModelNetModel(nn.Module):
         self.k_out = k_out[0]
         self.num_att_layer = len(k_out)
         self.Point_Embedding_list = nn.ModuleList(
-            [Point_Embedding(embedding_k, point_emb1_in, point_emb1_out) for
-             embedding_k, point_emb1_in, point_emb1_out in
-             zip(embedding_k, point_emb1_in, point_emb1_out)])
+            [Point_Embedding(embedding_k, point_emb1_in, point_emb1_out, conv2_channel_in, conv2_channel_out) for
+             embedding_k, point_emb1_in, point_emb1_out, conv2_channel_in, conv2_channel_out in
+             zip(embedding_k, point_emb1_in, point_emb1_out, conv2_channel_in, conv2_channel_out)])
         self.CrossAttentionMS_list = nn.ModuleList(
             [CrossAttentionMS(key_one_or_sep, K, scale, neighbor_selection_method, neighbor_type, shared_ca,
                               concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
@@ -688,9 +693,10 @@ class ModelNetModel(nn.Module):
                  concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
                  v_in, v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out)])
-        self.linear1 = nn.Sequential(nn.Linear(self.k_out * self.num_att_layer, 512), nn.BatchNorm1d(512),
+        self.conv_list = nn.Conv1d(v_out[0], 1024, kernel_size=1, bias=False)
+        self.linear1 = nn.Sequential(nn.Linear(self.num_att_layer * 1024, 1024), nn.BatchNorm1d(1024),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear2 = nn.Sequential(nn.Linear(512, 256), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
+        self.linear2 = nn.Sequential(nn.Linear(1024, 256), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
         self.linear3 = nn.Linear(256, 40)
         self.dp1 = nn.Dropout(p=0.5)
         self.dp2 = nn.Dropout(p=0.5)
@@ -708,17 +714,19 @@ class ModelNetModel(nn.Module):
             x = point_embedding(x, x)  # x.shape == (B, C, N)
             x_list.append(x)
         x = torch.cat(x_list, dim=1)  # x.shape == (B, num_layer x C, N)
-        for cross_attention in self.CrossAttentionMS_list:
-            x = cross_attention(x, xyz)
+
+        for cross_attentionMS in self.CrossAttentionMS_list:
+            x = cross_attentionMS(x, xyz)
             # x.shape == (B, C, N)
-            res_link_list.append(x)
-            # print("x.shape == (B, C, N)", x.shape)
-        x = torch.cat(res_link_list, dim=1)  # res_link_cat.shape == (B, len_config x C, N)
-        x = x.max(dim=-1)[0]  # x.shape == (B, len_config x C)
+            x_expand = self.conv_list(x)  # x_expand.shape == (B, 1024, N)
+            x_expand = x_expand.max(dim=-1)[0]  # x_expand.shape == (B, 1024)
+            res_link_list.append(x_expand)
+            # print("x.shape", x.shape)
+        x = torch.cat(res_link_list, dim=1)  # x.shape == (B, 4096)
         x = self.linear1(x)
-        # x.shape == (B, 512)
+        # x.shape == (B, 1024)
         x = self.dp1(x)
-        # x.shape == (B, 512)
+        # x.shape == (B, 1024)
         x = self.linear2(x)
         # x.shape == (B, 256)
         x = self.dp2(x)
