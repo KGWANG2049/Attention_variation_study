@@ -24,11 +24,11 @@ wandb:
   api_key: 7e17064baa2aaa0cccea0a2159ad51c758b7bf3a  # your wandb api key
   entity: ies_kaige  # the place to save your runs. can be your wandb username or team name
   project: ma_kaige # the name of your project
-  name: ma_test  # the name your run
+  name: cls_lr1e-4to1e-8_cosLR_adamw_weightdecay1_baseF_diff_keyone_scale0_CAscalarDot_perAttlayerexp1024_totalBS16 # the name your run
 
 train:  # only valid when running the training script
   epochs: 200
-  lr: 1e-3
+  lr: 1e-4
   lr_scheduler:
     enable: true
     which: cosLR  # expLR, stepLR, cosLR or cos_warmupLR
@@ -39,24 +39,24 @@ train:  # only valid when running the training script
       decay_step: 50
     cosLR:
       T_max: ${train.epochs}  # maximum epochs
-      eta_min: 1e-5  # minimum lr
+      eta_min: 1e-8  # minimum lr
     cos_warmupLR:
       warmup_epochs: 10  # number of epochs the warmup process takes
       warmup_init_lr: ${train.lr_scheduler.cos_warmupLR.eta_min}  # initial warmup lr
       T_max: 190  # number of epochs the cosine annealing process takes. should be epochs - warmup_epochs
-      eta_min: 1e-6  # minimum lr of cosine annealing process
+      eta_min: 1e-8  # minimum lr of cosine annealing process
   optimizer:
-    which: sgd  # adamw or sgd
-    weight_decay: 1e-5
+    which: adamw  # adamw or sgd
+    weight_decay: 1
   consistency_loss_factor: 1  # only valid when training modelnet model
   validation_freq: 1  # frequency in epoch(s) to validate the model
-  label_smoothing: true
+  label_smoothing: false
   epsilon: 0.2  # epsilon for label smoothing
   dataloader:
     selected_points: 2048  # points to be selected from every point cloud
     fps: false  #  whether to use fps to select points. if false, use random downsample to select points
     combine_trainval: true  # combine train and validation set as train set
-    batch_size_per_gpu: 4  # the actual batch size should be batch_size_per_gpu * num_gpu
+    batch_size_per_gpu: 16  # the actual batch size should be batch_size_per_gpu * num_gpu
     num_workers: ${train.ddp.nproc_this_node}  # the number of subprocess to load data
     prefetch: ${train.dataloader.batch_size_per_gpu}  # samples to be prefetched. e.g. 64 means 64*num_workers samples to be prefetched
     pin_memory: true  # pin memory in RAM
@@ -82,17 +82,17 @@ train:  # only valid when running the training script
         y_range: [0.66, 1.5]
         z_range: [0.66, 1.5]
   ddp:
-    which_gpu: [0, 1, 2, 3]
+    which_gpu: [0]
     syn_bn: true  # synchronize batch normalization among gpus
     master_addr: localhost  # don't change this if you use only one PC
     master_port: 12345  # please choose an available port
     nnodes: 1  # how many PCs you want to use
-    nproc_this_node: 4  # how many gpu you want to use in current PC, should match 'which_gpu'
+    nproc_this_node: 1  # how many gpu you want to use in current PC, should match 'which_gpu'
     rank_starts_from: 0  # don't change this if you use only one PC
-    world_size: 4  # this is equal to 'nproc_this_node' if you only use one PC
-  amp: true  # whether to use automatic mixed precision
+    world_size: 1  # this is equal to 'nproc_this_node' if you only use one PC
+  amp: false  # whether to use automatic mixed precision
   grad_clip:
-    enable: true
+    enable: false
     mode: value  # clip by value or by norm
     max_norm: 1e-2
     value: 1e-2
@@ -106,28 +106,28 @@ train:  # only valid when running the training script
     check_gradient_parameter_range: true  # gradient w.r.t layer parameters
 
 test:  # only valid when running the test script
-  label_smoothing: true
+  label_smoothing: false
   epsilon: 0.2  # epsilon for label smoothing
   dataloader:
-    batch_size_per_gpu: 4
+    batch_size_per_gpu: 8
     num_workers: ${test.ddp.nproc_this_node}  # the number of subprocess to load data
     prefetch: ${test.dataloader.batch_size_per_gpu}  # samples to be prefetched. e.g. 64 means 64*num_workers samples to be prefetched
     pin_memory: true  # pin memory in RAM
   ddp:
-    which_gpu: [0, 1, 2, 3]
+    which_gpu: [0]
     master_addr: localhost  # don't change this if you use only one PC
     master_port: 12345  # please choose an available port
     nnodes: 1  # how many PCs you want to use
-    nproc_this_node: 4  # how many gpu you want to use in current PC, should match 'which_gpu'
+    nproc_this_node: 1  # how many gpu you want to use in current PC, should match 'which_gpu'
     rank_starts_from: 0  # don't change this if you use only one PC
-    world_size: 4  # this is equal to 'nproc_this_node' if you only use one PC
+    world_size: 1  # this is equal to 'nproc_this_node' if you only use one PC
   print_results: true
-  visualize_preds:
+  visualize_preds:  # only be used in apes
     enable: false
     format: png  # png or ply
     vis_which: [0, 4]  # which category to be visualized
     num_vis: 5  # how many point clouds to visualize for one category
-  visualize_attention_heatmap:
+  visualize_attention_heatmap:  # only be used in apes
     enable: false
     format: png  # png or ply
     vis_which: [0, 4]  # which category to be visualized
@@ -138,8 +138,10 @@ test:  # only valid when running the test script
 #                             -> upsample -> neighbor2point -> upsample.-> neighbor2point
 Point_Embedding:
   embedding_k: [32, 32]
-  point_emb1_in: [6, 256]
-  point_emb1_out: [128, 128]
+  point_emb1_in: [6, 128]
+  point_emb1_out: [64, 64]
+  point_emb2_in: [64, 64]
+  point_emb2_out: [64, 64]
 
 CrossAttentionMS:
   key_one_or_sep: ['one', 'one', 'one', 'one']
@@ -149,15 +151,15 @@ CrossAttentionMS:
   neighbor_type: ['diff', 'diff', 'diff', 'diff']
   shared_ca: [True, True, True, True]
   concat_ms_inputs: [True, True, True, True]
-  mlp_or_ca: ['ca', 'ca', 'ca', 'ca']
-  q_in: [256, 256, 256, 256]
-  q_out: [256, 256, 256, 256]
-  k_in: [256, 256, 256, 256]
-  k_out: [256, 256, 256, 256]
-  v_in: [256, 256, 256, 256]
-  v_out: [256, 256, 256, 256]
-  num_heads: [8, 8, 8, 8]
-  ff_conv1_channels_in: [256, 256, 256, 256]
-  ff_conv1_channels_out: [256, 256, 256, 256]
-  ff_conv2_channels_in: [256, 256, 256, 256]
-  ff_conv2_channels_out: [256, 256, 256, 256]
+  mlp_or_ca: ['mlp', 'mlp', 'mlp', 'mlp']
+  q_in: [128, 128, 128, 128]
+  q_out: [128, 128, 128, 128]
+  k_in: [128, 128, 128, 128]
+  k_out: [128, 128, 128, 128]
+  v_in: [128, 128, 128, 128]
+  v_out: [128, 128, 128, 128]
+  num_heads: [4, 4, 4, 4]
+  ff_conv1_channels_in: [128, 128, 128, 128]
+  ff_conv1_channels_out: [512, 512, 512, 512]  #input x 4
+  ff_conv2_channels_in: [512, 512, 512, 512]
+  ff_conv2_channels_out: [128, 128, 128, 128]
