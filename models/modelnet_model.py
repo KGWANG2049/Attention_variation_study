@@ -256,10 +256,10 @@ class CrossAttention(nn.Module):
             raise ValueError(f'k_in and v_in should be the same! Got k_in:{k_in}, v_in:{v_in}')
         if q_out != k_out:
             raise ValueError('q_out should be equal to k_out!')
-        if q_out % num_heads != 0 or k_out % num_heads != 0 or v_out % num_heads != 0:
-            raise ValueError('please set another value for num_heads!')
         if q_out != v_out:
             raise ValueError('Please check the dimension of energy')
+        if q_out % num_heads != 0 or k_out % num_heads != 0 or v_out % num_heads != 0:
+            raise ValueError('please set another value for num_heads!')
         # print('q_out, k_out, v_out are same')
         self.Att_Score_method = Att_Score_method
         self.neighbor_type = neighbor_type
@@ -268,53 +268,29 @@ class CrossAttention(nn.Module):
         self.q_depth = int(q_out / num_heads)
         self.k_depth = int(k_out / num_heads)
         self.v_depth = int(v_out / num_heads)
-
-        self.q_conv = nn.Conv2d(q_in, q_out, 1, bias=False)
-        self.k_conv = nn.Conv2d(k_in, k_out, 1, bias=False)
-        self.v_conv = nn.Conv2d(v_in, v_out, 1, bias=False)
         self.softmax = nn.Softmax(dim=-1)
+
+        if self.neighbor_type == 'diff' or self.neighbor_type == 'neighbor':
+            self.q_conv = nn.Conv2d(q_in, q_out, 1, bias=False)
+            self.k_conv = nn.Conv2d(k_in, k_out, 1, bias=False)
+            self.v_conv = nn.Conv2d(v_in, v_out, 1, bias=False)
+        elif self.neighbor_type == 'center_neighbor' or self.neighbor_type == 'center_diff' or self.neighbor_type == 'neighbor_diff':
+            self.q_conv = nn.Conv2d(q_in, q_out, 1, bias=False)
+            self.k_conv = nn.Conv2d(2 * k_in, k_out, 1, bias=False)
+            self.v_conv = nn.Conv2d(2 * v_in, v_out, 1, bias=False)
+        elif self.neighbor_type == 'center_neighbor_diff':
+            self.q_conv = nn.Conv2d(q_in, q_out, 1, bias=False)
+            self.k_conv = nn.Conv2d(3 * k_in, k_out, 1, bias=False)
+            self.v_conv = nn.Conv2d(3 * v_in, v_out, 1, bias=False)
+
         """
         self.p_add = nn.Parameter(torch.ones(1, self.k_depth), requires_grad=True)  # q.shape == (1, D)
         self.p_cat = nn.Parameter(torch.ones(1, 2 * self.k_depth))  # q.shape == (1, 2D)
         """
-        self.c_type_conv = nn.Conv2d(k_in, k_out, 1, bias=False)
-        # self.two_c_type_conv = nn.Conv2d(2 * k_in, k_out, 1, bias=False)
-        # self.three_c_type_conv = nn.Conv2d(3 * k_in, k_out, 1, bias=False)
-        """
-        self.dot_linear_energy = nn.Linear(3, num_heads)
-        self.sub_linear_energy = nn.Linear(3, q_out)
-
-        self.linear_q = nn.Linear(3, q_out)
-        self.linear_k = nn.Linear(3, k_out)
-        self.linear_v = nn.Linear(3, v_out)
-        """
-
-    """   
-    name, param.grad module.CrossAttentionMS_list.0.ca.p_add None
-    name, param.grad module.CrossAttentionMS_list.0.ca.p_cat None
-    name, param.grad module.CrossAttentionMS_list.0.ca.three_c_type_conv.weight None
-    name, param.grad module.CrossAttentionMS_list.0.ca.dot_linear_energy.weight None
-    name, param.grad module.CrossAttentionMS_list.0.ca.dot_linear_energy.bias None
-    name, param.grad module.CrossAttentionMS_list.0.ca.sub_linear_energy.weight None
-    name, param.grad module.CrossAttentionMS_list.0.ca.sub_linear_energy.bias None
-    name, param.grad module.CrossAttentionMS_list.0.ca.linear_q.weight None
-    name, param.grad module.CrossAttentionMS_list.0.ca.linear_q.bias None
-    name, param.grad module.CrossAttentionMS_list.0.ca.linear_k.weight None
-    name, param.grad module.CrossAttentionMS_list.0.ca.linear_k.bias None
-    name, param.grad module.CrossAttentionMS_list.0.ca.linear_v.weight None
-    name, param.grad module.CrossAttentionMS_list.0.ca.linear_v.bias None
-    """
 
     def forward(self, pcd, neighbors):
         # pcd.shape == (B, C, N)
         pcd = pcd[:, :, :, None]  # pcd.shape == (B, C, N, 1)
-        if self.neighbor_type == 'center_neighbor' or self.neighbor_type == 'center_diff' or self.neighbor_type == 'neighbor_diff':
-            neighbors = self.two_c_type_conv(neighbors)  # neighbors.shape == (B, C, N, K)
-        elif self.neighbor_type == 'center_neighbor_diff':
-            neighbors = self.three_c_type_conv(neighbors)
-        elif self.neighbor_type == 'neighbor' or self.neighbor_type == 'diff':
-            neighbors = self.c_type_conv(neighbors)
-            # print("neighbors shape", neighbors.shape)
         # neighbors.shape == (B, C, N, K)
         q = self.q_conv(pcd)
         # q.shape == (B, C, N, 1)
@@ -518,31 +494,20 @@ class CrossAttentionMS(nn.Module):
         self.bn1 = nn.BatchNorm1d(v_out)
         self.bn2 = nn.BatchNorm1d(v_out)
 
-        if self.neighbor_type == 'center_neighbor' or self.neighbor_type == 'center_diff' or self.neighbor_type == 'neighbor_diff':
-            self.mlp = nn.Conv2d(2 * q_in, q_in, kernel_size=1, bias=False)
-        elif self.neighbor_type == 'center_neighbor_diff':
-            self.mlp = nn.Conv2d(3 * q_in, q_in, kernel_size=1, bias=False)
-        elif self.neighbor_type == 'neighbor' or self.neighbor_type == 'diff':
-            self.mlp = nn.Conv2d(q_in, q_in, kernel_size=1, bias=False)
-        else:
-            raise ValueError(f'neighbor_type should be center_neighbor, center_diff, neighbor_diff, '
-                             f'center_neighbor_diff, neighbor or diff, but got {neighbor_type}')
 
     def forward(self, pcd, coordinate):
         if self.key_one_or_sep == 'one':
             neighbors, idx_all = ops.select_neighbors_in_one_key(pcd, coordinate, self.K, self.scale,
                                                                  self.neighbor_selection_method, self.neighbor_type)
-            neighbors = self.mlp(neighbors.permute(0, 3, 1, 2))  # neighbor_list.shape == (B, C, N, K)
+            neighbors = neighbors.permute(0, 3, 1, 2)  # neighbor.shape == (B, num x C, N, (scale+1) x K)
         elif self.key_one_or_sep == 'sep':
             neighbors, idx_all = ops.select_neighbors_in_separate_key(pcd, coordinate, self.K, self.scale,
                                                                       self.neighbor_selection_method,
                                                                       self.neighbor_type)
-            neighbors = self.mlp(neighbors.permute(0, 3, 1, 2))  # neighbor_list.shape == (B, C, N, K)
+            neighbors = neighbors.permute(0, 3, 1, 2)  # neighbor.shape == (B, num x C, N, (scale+1) x K)
             neighbor_list = ops.list_generator(neighbors, self.K, self.scale)
+            # element shape in list == (B, num x C, N, K)
             # print("neighbor_list", neighbor_list.shape)
-        # neighbor_list.shape == (B, N, K, num x C)
-
-        # print("neighbor_list", neighbor_list.shape)
         if self.concat_ms_inputs:
             neighbors = torch.cat([neighbors], dim=1)
             x_out = self.ca(pcd, neighbors)
@@ -693,18 +658,20 @@ class ModelNetModel(nn.Module):
                  concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
                  v_in, v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out)])
-        self.conv_list = nn.Conv1d(v_out[0], 1024, kernel_size=1, bias=False)
+
         self.linear1 = nn.Sequential(nn.Linear(self.num_att_layer * 1024, 1024), nn.BatchNorm1d(1024),
                                      nn.LeakyReLU(negative_slope=0.2))
         self.linear2 = nn.Sequential(nn.Linear(1024, 256), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
         self.linear3 = nn.Linear(256, 40)
         self.dp1 = nn.Dropout(p=0.5)
         self.dp2 = nn.Dropout(p=0.5)
+        self.conv_list = nn.ModuleList(
+            [nn.Conv1d(channel_in, 1024, kernel_size=1, bias=False) for channel_in in ff_conv2_channels_out])
 
     def forward(self, x):
         device = x.device
         xyz = x
-        # print("my input divice :", device)
+        # print("my input :", x.shape)
         """
         :original pc xyz: xyz.shape == (B, 3, N)
         """
@@ -715,13 +682,14 @@ class ModelNetModel(nn.Module):
             x_list.append(x)
         x = torch.cat(x_list, dim=1)  # x.shape == (B, num_layer x C, N)
 
+        i = 0
         for cross_attentionMS in self.CrossAttentionMS_list:
             x = cross_attentionMS(x, xyz)
             # x.shape == (B, C, N)
-            x_expand = self.conv_list(x)  # x_expand.shape == (B, 1024, N)
-            x_expand = x_expand.max(dim=-1)[0]  # x_expand.shape == (B, 1024)
+            x_expand = self.conv_list[i](x).max(dim=-1)[0]  # x_expand.shape == (B, 1024)
             res_link_list.append(x_expand)
             # print("x.shape", x.shape)
+            i += 1
         x = torch.cat(res_link_list, dim=1)  # x.shape == (B, 4096)
         x = self.linear1(x)
         # x.shape == (B, 1024)

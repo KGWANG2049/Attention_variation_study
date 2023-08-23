@@ -1,4 +1,7 @@
 import shutil
+
+from ptflops import get_model_complexity_info
+import argparse
 from utils import dataloader, lr_scheduler
 from models import modelnet_model
 from omegaconf import OmegaConf
@@ -12,11 +15,11 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.cuda import amp
 import numpy as np
-from utils.loss import consistency_loss
-from ptflops import get_model_complexity_info
 import os
 import io
 import sys
+from thop import profile
+from torchstat import stat
 
 
 @hydra.main(version_base=None, config_path="./configs", config_name="default.yaml")
@@ -188,16 +191,23 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
 
     # get ddp model
     my_model = my_model.to(device)
+
+    original_stdout = sys.stdout
+    sys.stdout = buffer = io.StringIO()
+    sys.stdout = original_stdout
+    output = buffer.getvalue()
+    filename = f'saved_model/model_info_{run.id}.txt'
+    with open(filename, 'w') as f:
+        f.write(output)
+        f.write('\n')
+        f.write(
+            f'LOPs: {get_model_complexity_info(my_model, (3, 2048), as_strings=True, print_per_layer_stat=True)}\n')
+
     my_model = torch.nn.parallel.DistributedDataParallel(my_model)
     # find_unused_parameters = True
-    """
-    # get num_paras and FLOPS
-    checkpoints = my_model
-    model = torch.load(checkpoints)
-    model_name = 'att_var'
-    flops, params = get_model_complexity_info(model, (3, 2048), as_strings=True, print_per_layer_stat=True)
-    print("%s |%s |%s" % (model_name, flops, params))
-    """
+
+
+
     # add fp hook and bp hook
     if config.train.debug.enable:
         if len(config.train.ddp.which_gpu) > 1:
@@ -459,16 +469,6 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
         if param.requires_grad:
             print("name, param.grad", name, param.grad)
     """
-
-    original_stdout = sys.stdout
-    sys.stdout = buffer = io.StringIO()
-    sys.stdout = original_stdout
-    output = buffer.getvalue()
-    filename = f'saved_model/model_info_{run.id}.txt'
-    with open(filename, 'w') as f:
-        f.write(output)
-        f.write('\n')
-        f.write(f'LOPs: {get_model_complexity_info(my_model, (3, 2048), as_strings=True, print_per_layer_stat=True)}\n')
 
     save_dir = "saved_model"
     save_path = os.path.join(save_dir, f"model_{run.id}.pth")
