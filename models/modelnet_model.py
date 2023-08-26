@@ -455,39 +455,49 @@ class CrossAttention(nn.Module):
 
 
 #  multi_scale as separate keys
-class CrossAttentionMS(nn.Module):
-    def __init__(self, key_one_or_sep, K, scale, neighbor_selection_method, neighbor_type, shared_ca, concat_ms_inputs,
-                 mlp_or_ca,
+class Local_CrossAttention(nn.Module):
+    def __init__(self, single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
+                 neighbor_type, mlp_or_sum,
                  q_in, q_out, k_in, k_out, v_in,
                  v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
-        super(CrossAttentionMS, self).__init__()
+        super(Local_CrossAttention, self).__init__()
+        self.single_scale_or_multi_scale = single_scale_or_multi_scale
         self.key_one_or_sep = key_one_or_sep
+        self.shared_ca = shared_ca
         self.K = K
         self.scale = scale
         self.neighbor_selection_method = neighbor_selection_method
         self.neighbor_type = neighbor_type
-        self.shared_ca = shared_ca
-        self.concat_ms_inputs = concat_ms_inputs
-        self.mlp_or_ca = mlp_or_ca
+        self.mlp_or_sum = mlp_or_sum
 
         if q_in != v_out:
             raise ValueError(f'q_in should be equal to v_out due to ResLink! Got q_in: {q_in}, v_out: {v_out}')
-        if concat_ms_inputs:
-            if not shared_ca:
-                raise ValueError('shared_ca must be true when concat_ms_inputs is true')
-        if shared_ca:
+
+        if self.single_scale_or_multi_scale == 'ss':
             self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
+
+        elif self.single_scale_or_multi_scale == 'ms':
+
+            if self.key_one_or_sep == 'sep':
+
+                if self.shared_ca:
+                    self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
+                else:
+                    self.ca_list = nn.ModuleList(
+                        [CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads) for _ in range(scale + 1)])
+
+                if self.mlp_or_sum == 'mlp':
+                    self.linear = nn.Conv1d(v_out * (scale + 1), q_in, 1, bias=False)
+                #else:
+                    #raise ValueError(f'mlp_or_sum should be mlp or sum, but got {self.mlp_or_sum}')
+
+            elif self.key_one_or_sep == 'one':
+                self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
+
         else:
-            self.ca_list = nn.ModuleList(
-                [CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads) for _ in range(scale + 1)])
-        if not concat_ms_inputs:
-            if mlp_or_ca == 'mlp':
-                self.linear = nn.Conv1d(v_out * (scale + 1), q_in, 1, bias=False)
-            elif mlp_or_ca == 'ca':
-                self.ca_aggregation = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
-            else:
-                raise ValueError(f'mlp_or_ca should be mlp or ca, but got {mlp_or_ca}')
+            raise ValueError(f'key_one_or_sep or shared_ca config false{self.key_one_or_sep, self.shared_ca}')
+
         self.ff = nn.Sequential(nn.Conv1d(ff_conv1_channels_in, ff_conv1_channels_out, 1, bias=False),
                                 nn.LeakyReLU(negative_slope=0.2),
                                 nn.Conv1d(ff_conv2_channels_in, ff_conv2_channels_out, 1, bias=False))
@@ -495,46 +505,56 @@ class CrossAttentionMS(nn.Module):
         self.bn2 = nn.BatchNorm1d(v_out)
 
     def forward(self, pcd, coordinate):
-        if self.key_one_or_sep == 'one':
-            neighbors, idx_all = ops.select_neighbors_in_one_key(pcd, coordinate, self.K, self.scale,
-                                                                 self.neighbor_selection_method, self.neighbor_type)
-            neighbors = neighbors.permute(0, 3, 1, 2)  # neighbor.shape == (B, num x C, N, (scale+1) x K)
-        elif self.key_one_or_sep == 'sep':
-            neighbors, idx_all = ops.select_neighbors_in_separate_key(pcd, coordinate, self.K, self.scale,
-                                                                      self.neighbor_selection_method,
-                                                                      self.neighbor_type)
-            neighbors = neighbors.permute(0, 3, 1, 2)  # neighbor.shape == (B, num x C, N, (scale+1) x K)
-            neighbor_list = ops.list_generator(neighbors, self.K, self.scale)
-            # element shape in list == (B, num x C, N, K)
-            # print("neighbor_list", neighbor_list.shape)
-        if self.concat_ms_inputs:
-            neighbors = torch.cat([neighbors], dim=1)
-            x_out = self.ca(pcd, neighbors)
+        if self.single_scale_or_multi_scale == 'ss':
+            neighbors, idx_all = ops.select_neighbors_single_scale(pcd, coordinate, self.K, self.scale,
+                                                                   self.neighbor_selection_method,
+                                                                   self.neighbor_type)
+            neighbors = neighbors.permute(0, 3, 1, 2)  # neighbor.shape == (B, num x C, N, K)
+            x_out = self.ca(pcd, neighbors)  # x_out.shape == (B, C, N)
+        elif self.single_scale_or_multi_scale == 'ms':
+
+            if self.key_one_or_sep == 'one':
+                neighbors, idx_all = ops.select_neighbors_in_one_key(pcd, coordinate, self.K, self.scale,
+                                                                     self.neighbor_selection_method, self.neighbor_type)
+                neighbors = neighbors.permute(0, 3, 1, 2)  # neighbor.shape == (B, num x C, N, (scale+1) x K)
+                x_out = self.ca(pcd, neighbors)  # x_out.shape == (B, C, N)
+            elif self.key_one_or_sep == 'sep':
+                neighbors, idx_all = ops.select_neighbors_in_separate_key(pcd, coordinate, self.K, self.scale,
+                                                                          self.neighbor_selection_method,
+                                                                          self.neighbor_type)
+                neighbors = neighbors.permute(0, 3, 1, 2)  # neighbor.shape == (B, num x C, N, (scale+1) x K)
+                neighbor_list = ops.list_generator(neighbors, self.K, self.scale)  # element shape in list == (B,
+                # num x C, N, K)
+                # print("neighbor_list", neighbor_list.shape)
+                x_output_list = []
+                if self.shared_ca:
+                    for neighbors in neighbor_list:
+                        # x.shape == (B, C, N)  neighbors.shape == (B, C, N, K)
+                        x_out = self.ca(pcd, neighbors)
+                        # x_out.shape == (B, C, N)
+                        x_output_list.append(x_out)
+                else:
+                    for neighbors, ca in zip(neighbor_list, self.ca_list):
+                        # x.shape == (B, C, N)  neighbors.shape == (B, C, N, K)
+                        # print("neighbors", neighbors.shape)
+                        x_out = ca(pcd, neighbors)
+                        # x_out.shape == (B, C, N)
+                        x_output_list.append(x_out)
+
+                if self.mlp_or_sum == 'mlp':
+                    x_out = torch.cat(x_output_list, dim=1)  # x_out.shape == (B, (scale + 1) x C, N)
+                    x_out = self.linear(x_out)  # x_out.shape == (B, C, N)
+                elif self.mlp_or_sum == 'sum':
+                    x_out = torch.stack(x_output_list)  # x_out.shape == (scale+1, B, C, N)
+                    x_out = torch.sum(x_out, dim=0)  # x_out.shape == (B, C, N)
+                else:
+                    raise ValueError(f'mlp_or_sum should be mlp or sum, but got {self.mlp_or_sum}')
+            else:
+                raise ValueError(f'single_scale_or_multi_scale should be ss or ms, but got {self.key_one_or_sep}')
+
         else:
-            x_output_list = []
-            if self.shared_ca:
-                for neighbors in neighbor_list:
-                    # x.shape == (B, C, N)  neighbors.shape == (B, C, N, K)
-                    x_out = self.ca(pcd, neighbors)
-                    # x_out.shape == (B, C, N)
-                    x_output_list.append(x_out)
-            else:
-                for neighbors, ca in zip(neighbor_list, self.ca_list):
-                    # x.shape == (B, C, N)  neighbors.shape == (B, C, N, K)
-                    print("neighbors", neighbors.shape)
-                    x_out = ca(pcd, neighbors)
-                    # x_out.shape == (B, C, N)
-                    x_output_list.append(x_out)
-            if self.mlp_or_ca == 'mlp':
-                x_out = torch.cat(x_output_list, dim=1)
-                # x_out.shape == (B, C, N)
-                x_out = self.linear(x_out)
-                # x_out.shape == (B, C, N)
-            else:
-                neighbors = torch.stack(x_output_list, dim=-1)
-                # x.shape == (B, C, N)   neighbors.shape == (B, C, N, scale+1)
-                x_out = self.ca_aggregation(pcd, neighbors)
-                # x_out.shape == (B, C, N)
+            raise ValueError(f'key_one_or_sep should be one or sep, but got {self.single_scale_or_multi_scale}')
+
         # x_out.shape == (B, C, N)
         # print("pcd", pcd.shape, "x_out", x_out.shape)
         x = self.bn1(pcd + x_out)
@@ -546,74 +566,26 @@ class CrossAttentionMS(nn.Module):
         return x
 
 
-# multi_scale as one key
-class CrossAttentionMS_OneK(nn.Module):
-    def __init__(self, q_in, q_out, k_in, k_out, v_in, v_out, scale, num_heads, group_type):
-        super(CrossAttentionMS_OneK, self).__init__()
-
-        self.head_dim = q_in // num_heads
-        self.num_heads = num_heads
-        self.query_transform = nn.Linear(q_in, q_out)  # Linear layer (Wq)
-        self.key_transforms = nn.ModuleList(
-            [nn.Linear(k_in, k_out) for _ in range(scale + 1)])  # Each scale has an independent
-        # linear layer for key transformation (Wk)
-        self.value_transform = nn.Linear(v_in, v_out)  # Linear layer (Wv)
-        self.scale = scale
-        self.group_type = group_type
-
-    def forward(self, pcd, coordinate, K, neighbor_selection_method, neighbor_type, operation_mode='multiple'):
-        # Input_point_cloud_shape: (B, N, C),
-        # multi_scale_neighbors is list, len == num_scales, each element shape: (B, C, N, scale_i)
-
-        agg_neighbors = ops.select_neighbors_in_one_key(pcd, coordinate, K, self.scale, neighbor_selection_method
-                                                        , self.group_type)
-        # split the input tensor into multiple heads
-        query = self.query_transform(pcd).view(pcd.shape[0], pcd.shape[1], self.num_heads, self.head_dim)  # query
-        # shape:(B, N, num_heads, head_dim)
-
-        keys = [
-            self.key_transforms[i](agg_neighbors[i]).view(*agg_neighbors[i].shape[:-1], self.num_heads,
-                                                          self.head_dim) for i in range(self.scale + 1)]
-        # keys is list, len == num_scales, each element shape: (B, num_heads, N, scale_i, head_dim)
-
-        attention_maps = ops.operation_mode(operation_mode, query, keys)
-
-        # sum of attention_map
-        attention_map = sum(attention_maps)  # attention_map shape: (B, N, num_heads, max_scale)
-
-        value = self.value_transform(pcd).view(pcd.shape[0], pcd.shape[1], self.num_heads, self.head_dim).unsqueeze(
-            -2)  # value shape: (B, N, num_heads, 1, head_dim)
-
-        output = torch.matmul(attention_map.unsqueeze(-2), value).squeeze(-2)  # output shape: (B, N, num_heads,
-        # head_dim)
-
-        # concatenate the heads
-        output = output.reshape(output.shape[0], output.shape[1], -1)
-
-        return output  # (B, N, num_heads * head_dim)
-
-
 class Point_Embedding(nn.Module):
-    def __init__(self, embedding_k, conv1_channel_in, conv1_channel_out, conv2_channel_in, conv2_channel_out):
+    def __init__(self, embedding_k, conv1_channel_in, conv1_channel_out, point_emb2_in, point_emb2_out):
         super(Point_Embedding, self).__init__()
         self.conv1 = nn.Sequential(nn.Conv2d(conv1_channel_in, conv1_channel_out, kernel_size=1, bias=False),
                                    nn.BatchNorm2d(conv1_channel_out),
                                    nn.LeakyReLU(negative_slope=0.2))
-        self.conv2 = nn.Sequential(nn.Conv2d(conv2_channel_in, conv2_channel_out, kernel_size=1, bias=False),
-                                   nn.BatchNorm2d(conv2_channel_out),
+        self.conv2 = nn.Sequential(nn.Conv2d(point_emb2_in, point_emb2_out, kernel_size=1, bias=False),
+                                   nn.BatchNorm2d(point_emb2_out),
                                    nn.LeakyReLU(negative_slope=0.2))
         self.embedding_k = embedding_k
 
     # init_a.shape == (B, 3, N)
     # init_b.shape == (B, 3, N)
-    def forward(self, a, b):
+    def forward(self, a):
         # print("a initial shape:", a.shape)
         # print("b initial shape:", b.shape)
         a = a.permute(0, 2, 1)  # a.shape == (B, N, 3)
-        b = b.permute(0, 2, 1)  # b.shape == (B, N, 3)
         # print("a after permute shape:", a.shape)
         # print("b after permute shape:", b.shape)
-        idx = ops.knn(a, b, self.embedding_k)  # idx.shape == (B, N, K)
+        idx = ops.knn(a, a, self.embedding_k)  # idx.shape == (B, N, K)
         # print("idx shape:", idx.shape)
         neighbors = ops.index_points(a, idx)  # neighbors.shape == (B, N, K, 3)
         # print("neighbors shape:", neighbors.shape)
@@ -632,39 +604,46 @@ class Point_Embedding(nn.Module):
 
 
 class ModelNetModel(nn.Module):
-    def __init__(self, embedding_k, point_emb1_in, point_emb1_out, conv2_channel_in, conv2_channel_out, key_one_or_sep,
-                 K, scale, neighbor_selection_method, neighbor_type, shared_ca,
-                 concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
-                 v_in, v_out, num_heads, ff_conv1_channels_in,
+    def __init__(self, embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out,
+                 single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
+                 neighbor_type, mlp_or_sum,
+                 q_in, q_out, k_in, k_out, v_in,
+                 v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
         super(ModelNetModel, self).__init__()
         self.k_out = k_out[0]
         self.num_att_layer = len(k_out)
         self.Point_Embedding_list = nn.ModuleList(
-            [Point_Embedding(embedding_k, point_emb1_in, point_emb1_out, conv2_channel_in, conv2_channel_out) for
-             embedding_k, point_emb1_in, point_emb1_out, conv2_channel_in, conv2_channel_out in
-             zip(embedding_k, point_emb1_in, point_emb1_out, conv2_channel_in, conv2_channel_out)])
-        self.CrossAttentionMS_list = nn.ModuleList(
-            [CrossAttentionMS(key_one_or_sep, K, scale, neighbor_selection_method, neighbor_type, shared_ca,
-                              concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
-                              v_in, v_out, num_heads, ff_conv1_channels_in,
-                              ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out) for
-             key_one_or_sep, K, scale, neighbor_selection_method, neighbor_type, shared_ca,
-             concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
-             v_in, v_out, num_heads, ff_conv1_channels_in,
+            [Point_Embedding(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out) for
+             embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out in
+             zip(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out)])
+        self.Local_CrossAttention_list = nn.ModuleList(
+            [Local_CrossAttention(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
+                                  neighbor_selection_method,
+                                  neighbor_type, mlp_or_sum,
+                                  q_in, q_out, k_in, k_out, v_in,
+                                  v_out, num_heads, ff_conv1_channels_in,
+                                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out) for
+             single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
+             neighbor_type, mlp_or_sum,
+             q_in, q_out, k_in, k_out, v_in,
+             v_out, num_heads, ff_conv1_channels_in,
              ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out in
-             zip(key_one_or_sep, K, scale, neighbor_selection_method, neighbor_type, shared_ca,
-                 concat_ms_inputs, mlp_or_ca, q_in, q_out, k_in, k_out,
-                 v_in, v_out, num_heads, ff_conv1_channels_in,
+             zip(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
+                 neighbor_type, mlp_or_sum,
+                 q_in, q_out, k_in, k_out, v_in,
+                 v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out)])
-
+        self.linear0 = nn.Sequential(nn.Conv1d(self.k_out * self.num_att_layer, 1024, kernel_size=1, bias=False),
+                                     nn.BatchNorm1d(1024),
+                                     nn.LeakyReLU(negative_slope=0.2))
         self.linear1 = nn.Sequential(nn.Linear(1024, 512), nn.BatchNorm1d(512),
                                      nn.LeakyReLU(negative_slope=0.2))
         self.linear2 = nn.Sequential(nn.Linear(512, 256), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
         self.linear3 = nn.Linear(256, 40)
         self.dp1 = nn.Dropout(p=0.5)
         self.dp2 = nn.Dropout(p=0.5)
-        self.conv = nn.Conv1d(512, 1024, kernel_size=1, bias=False)
+
         # self.conv_list = nn.ModuleList(
         # [nn.Conv1d(channel_in, 1024, kernel_size=1, bias=False) for channel_in in ff_conv2_channels_out])
 
@@ -678,13 +657,13 @@ class ModelNetModel(nn.Module):
         x_list = []
         res_link_list = []
         for point_embedding in self.Point_Embedding_list:
-            x = point_embedding(x, x)  # x.shape == (B, C, N)
+            x = point_embedding(x)  # x.shape == (B, C, N)
             x_list.append(x)
         x = torch.cat(x_list, dim=1)  # x.shape == (B, num_layer x C, N)
 
         # i = 0
-        for cross_attentionMS in self.CrossAttentionMS_list:
-            x = cross_attentionMS(x, xyz)
+        for Local_CrossAttention in self.Local_CrossAttention_list:
+            x = Local_CrossAttention(x, xyz)
             # x.shape == (B, C, N)
             # x_extract = x.max(dim=-1)[0]
             # x_expand = self.conv_list[i](x).max(dim=-1)[0]  # x_expand.shape == (B, 1024)
@@ -692,7 +671,7 @@ class ModelNetModel(nn.Module):
             # print("x.shape", x.shape)
             # i += 1
         x = torch.cat(res_link_list, dim=1)  # x.shape == (B, 4096)  or  (B, 512, N)
-        x = self.conv(x).max(dim=-1)[0]  # x.shape == (B, 1024)
+        x = self.linear0(x).max(dim=-1)[0]  # x.shape == (B, 1024)
         x = self.linear1(x)
         # x.shape == (B, 1024)
         x = self.dp1(x)
