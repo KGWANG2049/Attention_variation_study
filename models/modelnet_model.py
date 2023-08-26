@@ -494,7 +494,6 @@ class CrossAttentionMS(nn.Module):
         self.bn1 = nn.BatchNorm1d(v_out)
         self.bn2 = nn.BatchNorm1d(v_out)
 
-
     def forward(self, pcd, coordinate):
         if self.key_one_or_sep == 'one':
             neighbors, idx_all = ops.select_neighbors_in_one_key(pcd, coordinate, self.K, self.scale,
@@ -659,14 +658,15 @@ class ModelNetModel(nn.Module):
                  v_in, v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out)])
 
-        self.linear1 = nn.Sequential(nn.Linear(self.num_att_layer * 1024, 1024), nn.BatchNorm1d(1024),
+        self.linear1 = nn.Sequential(nn.Linear(1024, 512), nn.BatchNorm1d(512),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear2 = nn.Sequential(nn.Linear(1024, 256), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
+        self.linear2 = nn.Sequential(nn.Linear(512, 256), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
         self.linear3 = nn.Linear(256, 40)
         self.dp1 = nn.Dropout(p=0.5)
         self.dp2 = nn.Dropout(p=0.5)
-        self.conv_list = nn.ModuleList(
-            [nn.Conv1d(channel_in, 1024, kernel_size=1, bias=False) for channel_in in ff_conv2_channels_out])
+        self.conv = nn.Conv1d(512, 1024, kernel_size=1, bias=False)
+        # self.conv_list = nn.ModuleList(
+        # [nn.Conv1d(channel_in, 1024, kernel_size=1, bias=False) for channel_in in ff_conv2_channels_out])
 
     def forward(self, x):
         device = x.device
@@ -682,21 +682,23 @@ class ModelNetModel(nn.Module):
             x_list.append(x)
         x = torch.cat(x_list, dim=1)  # x.shape == (B, num_layer x C, N)
 
-        i = 0
+        # i = 0
         for cross_attentionMS in self.CrossAttentionMS_list:
             x = cross_attentionMS(x, xyz)
             # x.shape == (B, C, N)
-            x_expand = self.conv_list[i](x).max(dim=-1)[0]  # x_expand.shape == (B, 1024)
-            res_link_list.append(x_expand)
+            # x_extract = x.max(dim=-1)[0]
+            # x_expand = self.conv_list[i](x).max(dim=-1)[0]  # x_expand.shape == (B, 1024)
+            res_link_list.append(x)
             # print("x.shape", x.shape)
-            i += 1
-        x = torch.cat(res_link_list, dim=1)  # x.shape == (B, 4096)
+            # i += 1
+        x = torch.cat(res_link_list, dim=1)  # x.shape == (B, 4096)  or  (B, 512, N)
+        x = self.conv(x).max(dim=-1)[0]  # x.shape == (B, 1024)
         x = self.linear1(x)
         # x.shape == (B, 1024)
         x = self.dp1(x)
         # x.shape == (B, 1024)
         x = self.linear2(x)
-        # x.shape == (B, 256)
+        # x.shape == (B, 512)
         x = self.dp2(x)
         # x.shape == (B, 256)
         x = self.linear3(x)
