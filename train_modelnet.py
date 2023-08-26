@@ -161,29 +161,29 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
 
     # get model
     my_model = modelnet_model.ModelNetModel(config['Point_Embedding']['embedding_k'],
-                                            config['Point_Embedding']['point_emb1_in'],
-                                            config['Point_Embedding']['point_emb1_out'],
-                                            config['Point_Embedding']['point_emb2_in'],
-                                            config['Point_Embedding']['point_emb2_out'],
-                                            config['CrossAttentionMS']['key_one_or_sep'],
-                                            config['CrossAttentionMS']['K'],
-                                            config['CrossAttentionMS']['scale'],
-                                            config['CrossAttentionMS']['neighbor_selection_method'],
-                                            config['CrossAttentionMS']['neighbor_type'],
-                                            config['CrossAttentionMS']['shared_ca'],
-                                            config['CrossAttentionMS']['concat_ms_inputs'],
-                                            config['CrossAttentionMS']['mlp_or_ca'],
-                                            config['CrossAttentionMS']['q_in'],
-                                            config['CrossAttentionMS']['q_out'],
-                                            config['CrossAttentionMS']['k_in'],
-                                            config['CrossAttentionMS']['k_out'],
-                                            config['CrossAttentionMS']['v_in'],
-                                            config['CrossAttentionMS']['v_out'],
-                                            config['CrossAttentionMS']['num_heads'],
-                                            config['CrossAttentionMS']['ff_conv1_channels_in'],
-                                            config['CrossAttentionMS']['ff_conv1_channels_out'],
-                                            config['CrossAttentionMS']['ff_conv2_channels_in'],
-                                            config['CrossAttentionMS']['ff_conv2_channels_out'])
+                                                config['Point_Embedding']['point_emb1_in'],
+                                                config['Point_Embedding']['point_emb1_out'],
+                                                config['Point_Embedding']['point_emb2_in'],
+                                                config['Point_Embedding']['point_emb2_out'],
+                                                config['Local_CrossAttention']['single_scale_or_multi_scale'],
+                                                config['Local_CrossAttention']['key_one_or_sep'],
+                                                config['Local_CrossAttention']['shared_ca'],
+                                                config['Local_CrossAttention']['K'],
+                                                config['Local_CrossAttention']['scale'],
+                                                config['Local_CrossAttention']['neighbor_selection_method'],
+                                                config['Local_CrossAttention']['neighbor_type'],
+                                                config['Local_CrossAttention']['mlp_or_sum'],
+                                                config['Local_CrossAttention']['q_in'],
+                                                config['Local_CrossAttention']['q_out'],
+                                                config['Local_CrossAttention']['k_in'],
+                                                config['Local_CrossAttention']['k_out'],
+                                                config['Local_CrossAttention']['v_in'],
+                                                config['Local_CrossAttention']['v_out'],
+                                                config['Local_CrossAttention']['num_heads'],
+                                                config['Local_CrossAttention']['ff_conv1_channels_in'],
+                                                config['Local_CrossAttention']['ff_conv1_channels_out'],
+                                                config['Local_CrossAttention']['ff_conv2_channels_in'],
+                                                config['Local_CrossAttention']['ff_conv2_channels_out'])
 
     # synchronize bn among gpus
     if config.train.ddp.syn_bn:  # TODO: test performance
@@ -191,21 +191,26 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
 
     # get ddp model
     my_model = my_model.to(device)
+    """
+    input1 = torch.randn(1, 3, 2048).cuda()
+    flops, params = profile(my_model, inputs=(input1, ))
+    print('FLOPs_thop = ' + str(flops / 1000 ** 3) + 'G')
+    print('Params_thop = ' + str(params / 1000 ** 2) + 'M')
+    """
+    my_model = torch.nn.parallel.DistributedDataParallel(my_model)
+    # find_unused_parameters = True
 
+    # Get FLOPs and Paras
     original_stdout = sys.stdout
     sys.stdout = buffer = io.StringIO()
     sys.stdout = original_stdout
     output = buffer.getvalue()
-    filename = f'saved_model/model_info_{run.id}.txt'
+    filename = f'saved_model/model_FLOPSinfo.txt'
     with open(filename, 'w') as f:
         f.write(output)
         f.write('\n')
         f.write(
             f'LOPs: {get_model_complexity_info(my_model, (3, 2048), as_strings=True, print_per_layer_stat=True)}\n')
-
-    my_model = torch.nn.parallel.DistributedDataParallel(my_model)
-    # find_unused_parameters = True
-
 
 
     # add fp hook and bp hook
