@@ -13,7 +13,7 @@ def index_points(points, idx):
     return res.view(*raw_shape, -1)
 
 
-def     knn(a, b, K):
+def knn(a, b, K):
     """
     :param a: a.shape == (B, N, C)
     :param b: b.shape == (B, M, C)
