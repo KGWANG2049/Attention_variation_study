@@ -455,13 +455,13 @@ class CrossAttention(nn.Module):
 
 
 #  multi_scale as separate keys
-class Local_CrossAttention(nn.Module):
+class Local_CrossAttention_Layer(nn.Module):
     def __init__(self, single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
                  neighbor_type, mlp_or_sum,
                  q_in, q_out, k_in, k_out, v_in,
                  v_out, num_heads, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
-        super(Local_CrossAttention, self).__init__()
+        super(Local_CrossAttention_Layer, self).__init__()
         self.single_scale_or_multi_scale = single_scale_or_multi_scale
         self.key_one_or_sep = key_one_or_sep
         self.shared_ca = shared_ca
@@ -479,7 +479,10 @@ class Local_CrossAttention(nn.Module):
 
         elif self.single_scale_or_multi_scale == 'ms':
 
-            if self.key_one_or_sep == 'sep':
+            if self.key_one_or_sep == 'one':
+                            self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
+
+            elif self.key_one_or_sep == 'sep':
 
                 if self.shared_ca:
                     self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
@@ -489,14 +492,12 @@ class Local_CrossAttention(nn.Module):
 
                 if self.mlp_or_sum == 'mlp':
                     self.linear = nn.Conv1d(v_out * (scale + 1), q_in, 1, bias=False)
-                #else:
-                    #raise ValueError(f'mlp_or_sum should be mlp or sum, but got {self.mlp_or_sum}')
-
-            elif self.key_one_or_sep == 'one':
-                self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
-
+            
+            else:
+                raise ValueError(f'key_one_or_sep should be one or sep! but got {self.key_one_or_sep}')
+            
         else:
-            raise ValueError(f'key_one_or_sep or shared_ca config false{self.key_one_or_sep, self.shared_ca}')
+                raise ValueError(f'single_scale_or_multi_scale should be ss or ms, but got {self.single_scale_or_multi_scale}')
 
         self.ff = nn.Sequential(nn.Conv1d(ff_conv1_channels_in, ff_conv1_channels_out, 1, bias=False),
                                 nn.LeakyReLU(negative_slope=0.2),
@@ -547,13 +548,6 @@ class Local_CrossAttention(nn.Module):
                 elif self.mlp_or_sum == 'sum':
                     x_out = torch.stack(x_output_list)  # x_out.shape == (scale+1, B, C, N)
                     x_out = torch.sum(x_out, dim=0)  # x_out.shape == (B, C, N)
-                else:
-                    raise ValueError(f'mlp_or_sum should be mlp or sum, but got {self.mlp_or_sum}')
-            else:
-                raise ValueError(f'single_scale_or_multi_scale should be ss or ms, but got {self.key_one_or_sep}')
-
-        else:
-            raise ValueError(f'key_one_or_sep should be one or sep, but got {self.single_scale_or_multi_scale}')
 
         # x_out.shape == (B, C, N)
         # print("pcd", pcd.shape, "x_out", x_out.shape)
@@ -617,8 +611,8 @@ class ModelNetModel(nn.Module):
             [Point_Embedding(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out) for
              embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out in
              zip(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out)])
-        self.Local_CrossAttention_list = nn.ModuleList(
-            [Local_CrossAttention(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
+        self.Local_CrossAttention_Layer_list = nn.ModuleList(
+            [Local_CrossAttention_Layer(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
                                   neighbor_selection_method,
                                   neighbor_type, mlp_or_sum,
                                   q_in, q_out, k_in, k_out, v_in,
@@ -662,8 +656,8 @@ class ModelNetModel(nn.Module):
         x = torch.cat(x_list, dim=1)  # x.shape == (B, num_layer x C, N)
 
         # i = 0
-        for Local_CrossAttention in self.Local_CrossAttention_list:
-            x = Local_CrossAttention(x, xyz)
+        for Local_CrossAttention_Layer in self.Local_CrossAttention_Layer_list:
+            x = Local_CrossAttention_Layer(x, xyz)
             # x.shape == (B, C, N)
             # x_extract = x.max(dim=-1)[0]
             # x_expand = self.conv_list[i](x).max(dim=-1)[0]  # x_expand.shape == (B, 1024)
@@ -671,7 +665,8 @@ class ModelNetModel(nn.Module):
             # print("x.shape", x.shape)
             # i += 1
         x = torch.cat(res_link_list, dim=1)  # x.shape == (B, 4096)  or  (B, 512, N)
-        x = self.linear0(x).max(dim=-1)[0]  # x.shape == (B, 1024)
+        x = self.linear0(x)  # x.shape == (B, 1024, N)
+        x = x.max(dim=-1)[0]  # x.shape == (B, 1024)
         x = self.linear1(x)
         # x.shape == (B, 1024)
         x = self.dp1(x)
