@@ -2,10 +2,12 @@ import torch
 from torch import nn
 from utils import ops
 import math
+from models.attention_variants import Local_based_attention_variation, Global_based_attention_variation
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, q_in=64, q_out=64, k_in=64, k_out=64, v_in=64, v_out=64, num_points=2048, num_heads=8):
+    def __init__(self, q_in=64, q_out=64, k_in=64, k_out=64, v_in=64, v_out=64, num_heads=8,
+                 Att_Score_method='global_dot'):
         super(SelfAttention, self).__init__()
         # check input values
         if k_in != v_in:
@@ -17,171 +19,41 @@ class SelfAttention(nn.Module):
         if q_out != v_out:
             raise ValueError('Please check the dimension of energy')
         # print('q_out, k_out, v_out are same')
-        self.num_points = num_points
+        self.Global_based_attention_variation = Global_based_attention_variation()
+        self.Att_Score_method = Att_Score_method
         self.num_heads = num_heads
         self.q_depth = int(q_out / num_heads)
         self.k_depth = int(k_out / num_heads)
         self.v_depth = int(v_out / num_heads)
 
-        self.q_conv = nn.Conv2d(q_in, q_out, 1, bias=False)
-        self.k_conv = nn.Conv2d(k_in, k_out, 1, bias=False)
-        self.v_conv = nn.Conv2d(v_in, v_out, 1, bias=False)
+        self.q_conv = nn.Conv1d(q_in, q_out, 1, bias=False)
+        self.k_conv = nn.Conv1d(k_in, k_out, 1, bias=False)
+        self.v_conv = nn.Conv1d(v_in, v_out, 1, bias=False)
         self.softmax = nn.Softmax(dim=-1)
-        self.p_add = nn.Parameter(torch.ones(1, self.k_depth))  # q.shape == (1, D)
 
-        self.linear_energy = nn.Linear(3, num_points * num_heads)
-        self.linear_q = nn.Linear(3, q_out)
-        self.linear_k = nn.Linear(3, k_out)
-        self.linear_v = nn.Linear(3, v_out)
-        # self.linear_energy = nn.Linear(3, num_points)
-        # self.linear_qkv = nn.Linear(3, self.v_depth)
-
-    def forward(self, coordinate, x, neighbors, Att_Score_method, pos_method):
+    def forward(self, x):
         # x.shape == (B, C, N)
         q = self.q_conv(x)
         # q.shape == (B, C, N)
         q = self.global_split_heads(q, self.num_heads, self.q_depth)
         # q.shape == (B, H, N, D)
-        k = self.k_conv(neighbors)
+        k = self.k_conv(x)
         # k.shape ==  (B, C, N)
         k = self.global_split_heads(k, self.num_heads, self.k_depth)
         # k.shape == (B, H, N, D)
-        v = self.v_conv(neighbors)
+        v = self.v_conv(x)
         # v.shape ==  (B, C, N)
         v = self.global_split_heads(v, self.num_heads, self.v_depth)
         # v.shape == (B, H, N, D)
 
-        if Att_Score_method == 'dot_product':
-            k = k.permute(0, 1, 3, 2)
-            # k.shape == (B, H, D, N)
-            if pos_method == 'method_i':
-                energy = q @ k
-                # energy.shape == (B, H, N, N)
-                energy = self.pe_type_energy(coordinate, energy)
-                v_context = self.pe_type_v_comb(coordinate, v)
-                scale_factor = math.sqrt(q.shape[-1])
-                attention = self.softmax(energy / scale_factor)
-                # attention.shape == (B, H, N, N)
-                x = (attention * v_context).permute(0, 2, 1, 3)
-                # x.shape == (B, N, H, D)
-            elif pos_method == 'method_ii':
-                q_context = self.pe_type_q_comb(coordinate, q)
-                v_context = self.pe_type_v_comb(coordinate, v)
-                energy = q @ k + q_context
-                # energy.shape == (B, H, N, N)
-                scale_factor = math.sqrt(q.shape[-1])
-                attention = self.softmax(energy / scale_factor)
-                # attention.shape == (B, H, N, N)
-                x = (attention * v_context).permute(0, 2, 1, 3)
-                # x.shape == (B, N, H, D)
-            elif pos_method == 'method_iii':
-                q_context = self.pe_type_q_comb(coordinate, q)
-                k_context = self.pe_type_k_comb(coordinate, k)
-                v_context = self.pe_type_v_comb(coordinate, v)
-                energy = q @ k + q_context + k_context
-                # energy.shape == (B, H, N, N)
-                scale_factor = math.sqrt(q.shape[-1])
-                attention = self.softmax(energy / scale_factor)
-                # attention.shape == (B, H, N, N)
-                x = (attention * v_context).permute(0, 2, 1, 3)
-                # x.shape == (B, N, H, D)
-            else:
-                raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
+        if self.Att_Score_method == 'global_dot':
+            x = self.Global_based_attention_variation.global_attention_Dot(q, k, v)
 
-        elif Att_Score_method == 'subtraction':
-            if pos_method == 'method_i':
-                energy = (q - k) @ ((q - k).permute(1, 0))
-                # energy.shape == (B, H, N, N)
-                energy = self.pe_type_energy(coordinate, energy)
-                v_context = self.pe_type_v_comb(coordinate, v)
-                scale_factor = math.sqrt(q.shape[-1])
-                attention = self.softmax(energy / scale_factor)
-                # attention.shape == (B, H, N, N)
-                x = (attention * v_context).permute(0, 2, 1, 3)
-                # x.shape == (B, N, H, D)
-            elif pos_method == 'method_ii':
-                q_context = self.pe_type_q_comb(coordinate, q)
-                energy = (q - k) @ ((q - k).permute(1, 0)) + q_context
-                # energy.shape == (B, H, N, N)
-                v_context = self.pe_type_v_comb(coordinate, v)
-                scale_factor = math.sqrt(q.shape[-1])
-                attention = self.softmax(energy / scale_factor)
-                # attention.shape == (B, H, N, N)
-                x = (attention * v_context).permute(0, 2, 1, 3)
-                # x.shape == (B, N, H, D)
-            elif pos_method == 'method_iii':
-                q_context = self.pe_type_q_comb(coordinate, q)
-                k_context = self.pe_type_k_comb(coordinate, k)
-                v_context = self.pe_type_v_comb(coordinate, v)
-                energy = (q - k) @ ((q - k).permute(1, 0)) + q_context + k_context
-                # energy.shape == (B, H, N, N)
-                scale_factor = math.sqrt(q.shape[-1])
-                attention = self.softmax(energy / scale_factor)
-                # attention.shape == (B, H, N, N)
-                x = (attention * v_context).permute(0, 2, 1, 3)
-                # x.shape == (B, N, H, D)
-            else:
-                raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
-
-        elif Att_Score_method == 'addition':
-            if pos_method == 'method_i':
-                q = q.unsqueeze(-2).repeat(1, 1, 1, q.shape[2], 1)
-                # q.shape == (B, H, N, N, D)
-                k = k.unsqueeze(-2).repeat(1, 1, 1, k.shape[2], 1)
-                # k.shape == (B, H, N, N, D)
-                energy = q + k
-                # energy.shape == (B, H, N, N, D)
-                scale_factor = math.sqrt(q.shape[-1])
-                energy = torch.tanh(energy / scale_factor)
-                # attention.shape == (B, H, N, N, D)
-                energy = energy @ self.p_add
-                energy = self.pe_type_energy(coordinate, energy)
-                attention = self.softmax(energy)
-                # attention.shape == (B, H, N, N)
-                x = (attention * v).permute(0, 2, 1, 3)
-                # x.shape == (B, N, H, D)
-            elif pos_method == 'method_ii':
-                q_context = self.pe_type_q_comb(coordinate, q)
-                v_context = self.pe_type_v_comb(coordinate, v)
-                # q_context.shape == (B, H, N, N)
-                q = q.unsqueeze(-2).repeat(1, 1, 1, q.shape[2], 1)
-                # q.shape == (B, H, N, N, D)
-                k = k.unsqueeze(-2).repeat(1, 1, 1, k.shape[2], 1)
-                # k.shape == (B, H, N, N, D)
-                energy = q + k
-                # energy.shape == (B, H, N, N, D)
-                scale_factor = math.sqrt(q.shape[-1])
-                energy = torch.tanh(energy / scale_factor)
-                # attention.shape == (B, H, N, N, D)
-                energy = energy @ self.p_add + q_context
-                # energy.shape == (B, H, N, N)
-                attention = self.softmax(energy)
-                # attention.shape == (B, H, N, N)
-                x = (attention * v_context).permute(0, 2, 1, 3)
-                # x.shape == (B, N, H, D)
-            elif pos_method == 'method_iii':
-                q_context = self.pe_type_q_comb(coordinate, q)
-                k_context = self.pe_type_k_comb(coordinate, k)
-                v_context = self.pe_type_v_comb(coordinate, v)
-                # q_context.shape == (B, H, N, N)
-                q = q.unsqueeze(-2).repeat(1, 1, 1, q.shape[2], 1)
-                # q.shape == (B, H, N, N, D)
-                k = k.unsqueeze(-2).repeat(1, 1, 1, k.shape[2], 1)
-                # k.shape == (B, H, N, N, D)
-                energy = q + k
-                # energy.shape == (B, H, N, N, D)
-                scale_factor = math.sqrt(q.shape[-1])
-                energy = torch.tanh(energy / scale_factor)
-                # attention.shape == (B, H, N, N, D)
-                energy = energy @ self.p_add + q_context + k_context
-                # energy.shape == (B, H, N, N)
-                attention = self.softmax(energy)
-                # attention.shape == (B, H, N, N)
-                x = (attention * v_context).permute(0, 2, 1, 3)
-                # x.shape == (B, N, H, D)
-
-            else:
-                raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
+        elif self.Att_Score_method == 'global_sub':
+            x = self.Global_based_attention_variation.global_attention_Sub(q, k, v)
+            print("succeed using glosub", x.shape)
+        else:
+            raise ValueError(f"Att_Score_method must be 'global_dot', 'global_sub'. Got: {self.Att_Score_method}")
 
         x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
         # x.shape == (B, C, N)
@@ -195,63 +67,36 @@ class SelfAttention(nn.Module):
         # x.shape == (B, H, N, D)
         return x
 
-    def pe_type_energy(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N)
-        coordinates = coordinates.permute(0, 2, 1)
-        # coordinates.shape == (B, N, 3)
-        pos = self.linear_energy(coordinates)
-        # pos.shape == (B, N, N x H), The last dimension is coordinate projection
-        pos = pos.permute(0, 2, 1)
-        # pos.shape == (B, N x H, N)
-        pos = self.global_split_heads(pos, self.num_heads, self.num_points)
-        # pos.shape == (B, H, N, N)
-        pos_trans_value = trans_value + pos
-        return pos_trans_value
 
-    def pe_type_q_comb(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N)
-        coordinates = coordinates.permute(0, 2, 1)
-        # coordinates.shape == (B, N, 3)
-        pos = self.linear_q(coordinates)
-        # pos.shape == (B, N, D x H), The last dimension is coordinate projection
-        pos = pos.permute(0, 2, 1)
-        pos = self.global_split_heads(pos, self.num_heads, self.q_depth)
-        # pos.shape == (B, H, N, D)
-        pos_trans_value = trans_value @ pos.permute(0, 1, 3, 2)
-        # pos_trans_value.shape == (B, H, N, N)
-        return pos_trans_value
+class Global_Attention_Layer(nn.Module):
+    def __init__(self, q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method,
+                 ff_conv1_channels_in, ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
+        super(Global_Attention_Layer, self).__init__()
 
-    def pe_type_k_comb(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N)
-        coordinates = coordinates.permute(0, 2, 1)
-        # coordinates.shape == (B, N, 3)
-        pos = self.linear_k(coordinates)
-        # pos.shape == (B, N, D x H), The last dimension is coordinate projection
-        pos = pos.permute(0, 2, 1)
-        pos = self.global_split_heads(pos, self.num_heads, self.k_depth)
-        # pos.shape == (B, H, N, D)
-        pos_trans_value = trans_value @ pos.permute(0, 1, 3, 2)
-        # pos_trans_value.shape == (B, H, N, N)
-        return pos_trans_value
+        if q_in != v_out:
+            raise ValueError(f'q_in should be equal to v_out due to ResLink! Got q_in: {q_in}, v_out: {v_out}')
+        self.Att_Score_method = Att_Score_method
+        self.sa = SelfAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method)
+        self.ff = nn.Sequential(nn.Conv1d(ff_conv1_channels_in, ff_conv1_channels_out, 1, bias=False),
+                                nn.LeakyReLU(negative_slope=0.2),
+                                nn.Conv1d(ff_conv2_channels_in, ff_conv2_channels_out, 1, bias=False))
+        self.bn1 = nn.BatchNorm1d(v_out)
+        self.bn2 = nn.BatchNorm1d(v_out)
 
-    def pe_type_v_comb(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N)
-        coordinates = coordinates.permute(0, 2, 1)
-        # coordinates.shape == (B, N, 3)
-        pos = self.linear_v(coordinates)
-        # pos.shape == (B, N, D x H), The last dimension is coordinate projection
-        pos = pos.permute(0, 2, 1)
-        pos = self.global_split_heads(pos, self.num_heads, self.v_depth)
-        # pos.shape == (B, H, N, D)
-        pos_trans_value = trans_value + pos
-        return pos_trans_value
+    def forward(self, pcd):
+        x_out = self.sa(pcd)  # x_out.shape == (B, C, N)
+        x = self.bn1(pcd + x_out)  # x.shape == (B, C, N)
+        x_out = self.ff(x)  # x_out.shape == (B, C, N)
+        x = self.bn2(x + x_out)  # x.shape == (B, C, N)
+        return x
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, q_in=64, q_out=64, k_in=64, k_out=64, v_in=64, v_out=64, num_points=1024, num_heads=8
-                 , neighbor_type='diff', Att_Score_method='dot_product'):
+    def __init__(self, q_in=64, q_out=64, k_in=64, k_out=64, v_in=64, v_out=64, num_heads=8,
+                 Att_Score_method='local_scalar_dot', neighbor_type='diff'):
         super(CrossAttention, self).__init__()
         # check input values
+        print("number head", num_heads)
         if k_in != v_in:
             raise ValueError(f'k_in and v_in should be the same! Got k_in:{k_in}, v_in:{v_in}')
         if q_out != k_out:
@@ -263,13 +108,13 @@ class CrossAttention(nn.Module):
         # print('q_out, k_out, v_out are same')
         self.Att_Score_method = Att_Score_method
         self.neighbor_type = neighbor_type
-        self.num_points = num_points
         self.num_heads = num_heads
         self.q_depth = int(q_out / num_heads)
         self.k_depth = int(k_out / num_heads)
         self.v_depth = int(v_out / num_heads)
         self.softmax = nn.Softmax(dim=-1)
-
+        self.Local_based_attention_variation = Local_based_attention_variation(k_out, num_heads, Att_Score_method)
+        self.Global_based_attention_variation = Global_based_attention_variation()
         if self.neighbor_type == 'diff' or self.neighbor_type == 'neighbor':
             self.q_conv = nn.Conv2d(q_in, q_out, 1, bias=False)
             self.k_conv = nn.Conv2d(k_in, k_out, 1, bias=False)
@@ -307,59 +152,24 @@ class CrossAttention(nn.Module):
         k = k.permute(0, 1, 2, 4, 3)
         # k.shape == (B, H, N, D, K)
 
-        if self.Att_Score_method == 'dot_product':
-            energy = q @ k
-            # energy.shape == (B, H, N, 1, K)
-            scale_factor = math.sqrt(q.shape[-1])
-            attention = self.softmax(energy / scale_factor)
-            # attention.shape == (B, H, N, 1, K)
-            x = (attention @ v)[:, :, :, 0, :].permute(0, 2, 1, 3)
-            # x.shape == (B, N, H, D)
+        if self.Att_Score_method == 'local_scalar_dot':
+            x = self.Local_based_attention_variation.local_attention_scalarDot(q, k, v)
 
-        elif self.Att_Score_method == 'subtraction':
-            q_repeated = q.repeat(1, 1, 1, k.shape[-2], 1)
-            # q_repeated.shape == (B, H, N, K, D) to match with k
-            energy = q_repeated - k
-            # energy.shape == (B, H, N, K, D)
-            scale_factor = math.sqrt(q.shape[-1])
-            attention = self.softmax(energy / scale_factor)
-            # attention.shape == (B, H, N, K, D)
-            x = (attention * v).permute(0, 2, 1, 3, 4)
-            # x.shape == (B, N, H, K, D)
-            x = x.sum(dim=-2)
-            # x.shape == (B, N, H, D)
-            """
-        elif self.Att_Score_method == 'addition':
-            q_repeated = q.repeat(1, 1, 1, None, 1)
-            # q_repeated.shape == (B, H, N, 1, D)
-            energy = q_repeated + k
-            # q_repeated.shape == (B, H, N, K, D) to match with k
-            # energy.shape == (B, H, N, K, D)
-            scale_factor = math.sqrt(q.shape[-1])
-            attention = torch.tanh(energy / scale_factor)
-            # attention.shape == (B, H, N, K, D)
-            attention = attention @ self.p_add  # position encoding in here
-            # attention.shape == (B, H, N, K)
-            attention = self.softmax(attention.unsqueeze(-2))
-            # attention.shape == (B, H, N, 1, K)
-            x = (attention @ v)[:, :, :, 0, :].permute(0, 2, 1, 3)
-            # x.shape == (B, N, H, D)
+        elif self.Att_Score_method == 'local_scalar_sub':
+            x = self.Local_based_attention_variation.local_attention_scalarSub(q, k, v)
 
-        elif self.Att_Score_method == 'concat':
-            q_repeated = q.repeat(1, 1, 1, k.shape[-2], 1)
-            # q_repeated.shape == (B, H, N, K, D) to match with k
-            energy = torch.cat((q_repeated, k), dim=-1)
-            # energy.shape == (B, H, N, K, 2D)
-            scale_factor = math.sqrt(q.shape[-1])
-            attention = torch.tanh(energy / scale_factor)
-            # attention.shape == (B, H, N, K, 2D)
-            attention = attention @ self.p_cat  # position encoding in here
-            # attention.shape == (B, H, N, K)
-            attention = self.softmax(attention.unsqueeze(-2))
-            # attention.shape == (B, H, N, 1, K)
-            x = (attention @ v)[:, :, :, 0, :].permute(0, 2, 1, 3)
-            # x.shape == (B, N, H, D)
-            """
+        elif self.Att_Score_method == 'local_scalar_add':
+            x = self.Local_based_attention_variation.local_attention_scalarAdd(q, k, v)
+
+        elif self.Att_Score_method == 'local_scalar_cat':
+            x = self.Local_based_attention_variation.local_attention_scalarCat(q, k, v)
+
+        elif self.Att_Score_method == 'local_vector_sub':
+            x = self.Local_based_attention_variation.local_attention_vectorSub(q, k, v)
+
+        elif self.Att_Score_method == 'local_vector_add':
+            x = self.Local_based_attention_variation.local_attention_vectorAdd(q, k, v)
+
         else:
             raise ValueError(f'Invalid value for Att_Score_method: {self.Att_Score_method}')
 
@@ -377,91 +187,14 @@ class CrossAttention(nn.Module):
         return x
 
 
-"""
-    def pe_sub_energy(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N, K)
-        coordinates = coordinates.permute(0, 3, 2, 1)
-        # coordinates.shape == (B, K, N, 3)
-        pos = self.sub_linear_energy(coordinates)
-        # pos.shape == (B, K, N, H x D)
-        pos = pos.permute(0, 3, 2, 1)
-        # pos.shape == (B, H x D, N, K)
-        pos = self.split_heads(pos, self.num_heads, self.q_depth)
-        # pos.shape == (B, H, N, K, D)
-        pos_trans_value = trans_value + pos
-        return pos_trans_value
-
-    def pe_dot_energy(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N, K)
-        coordinates = coordinates.permute(0, 3, 2, 1)
-        # coordinates.shape == (B, K, N, 3)
-        pos = self.dot_linear_energy(coordinates)
-        # pos.shape == (B, K, N, H)
-        pos = pos[:, :, :, None, :].permute(0, 4, 2, 3, 1)
-        # pos.shape == (B, H, N, 1, K)
-        pos_trans_value = trans_value + pos
-        return pos_trans_value
-
-    def pe_add_cat_energy(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N, K)
-        coordinates = coordinates.permute(0, 3, 2, 1)
-        # coordinates.shape == (B, K, N, 3)
-        pos = self.dot_linear_energy(coordinates).permute(0, 3, 2, 1)
-        # pos.shape == (B, H, N, K)
-        pos_trans_value = trans_value + pos
-        return pos_trans_value
-
-    def pe_dot_q_comb(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N, K)
-        coordinates = coordinates.permute(0, 3, 2, 1)
-        # coordinates.shape == (B, K, N, 3)
-        pos = self.linear_q(coordinates)
-        # pos.shape == (B, K, N, D x H), The last dimension is coordinate projection
-        pos = pos.permute(0, 3, 2, 1)
-        pos = self.split_heads(pos, self.num_heads, self.q_depth)
-        # pos.shape == (B, H, N, K, D)
-        pos_trans_value = trans_value @ pos
-        # pos_trans_value.shape == (B, H, N, 1, K)
-        return pos_trans_value
-
-    def pe_add_cat_q_comb(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N, K)
-        coordinates = coordinates.permute(0, 3, 2, 1)
-        # coordinates.shape == (B, K, N, 3)
-        pos = self.linear_q(coordinates)
-        # pos.shape == (B, K, N, D x H), The last dimension is coordinate projection
-        pos = pos.permute(0, 3, 2, 1)
-        pos = self.split_heads(pos, self.num_heads, self.q_depth)
-        # pos.shape == (B, H, N, K, D)
-        pos_trans_value = pos @ trans_value
-        # pos_trans_value.shape == (B, H, N, K)
-        return pos_trans_value
-
-    "Miss three function for k for position encoding"
-
-    def pe_v_comb(self, coordinates, trans_value):
-        # coordinates.shape == (B, 3, N, K)
-        coordinates = coordinates.permute(0, 3, 2, 1)
-        # coordinates.shape == (B, K, N, 3)
-        pos = self.linear_q(coordinates)
-        # pos.shape == (B, K, N, D x H), The last dimension is coordinate projection
-        pos = pos.permute(0, 3, 2, 1)
-        pos = self.split_heads(pos, self.num_heads, self.q_depth)
-        # pos.shape == (B, H, N, K, D)
-        pos_trans_value = trans_value + pos
-        # pos_trans_value.shape == (B, H, N, K, D)
-        return pos_trans_value
-    """
-
-
-#  multi_scale as separate keys
 class Local_CrossAttention_Layer(nn.Module):
     def __init__(self, single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
                  neighbor_type, mlp_or_sum,
                  q_in, q_out, k_in, k_out, v_in,
-                 v_out, num_heads, ff_conv1_channels_in,
+                 v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
         super(Local_CrossAttention_Layer, self).__init__()
+
         self.single_scale_or_multi_scale = single_scale_or_multi_scale
         self.key_one_or_sep = key_one_or_sep
         self.shared_ca = shared_ca
@@ -475,29 +208,33 @@ class Local_CrossAttention_Layer(nn.Module):
             raise ValueError(f'q_in should be equal to v_out due to ResLink! Got q_in: {q_in}, v_out: {v_out}')
 
         if self.single_scale_or_multi_scale == 'ss':
-            self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
+            self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method, neighbor_type)
 
         elif self.single_scale_or_multi_scale == 'ms':
 
             if self.key_one_or_sep == 'one':
-                            self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
+                self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method,
+                                         neighbor_type)
 
             elif self.key_one_or_sep == 'sep':
 
                 if self.shared_ca:
-                    self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads)
+                    self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method,
+                                             neighbor_type)
                 else:
                     self.ca_list = nn.ModuleList(
-                        [CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads) for _ in range(scale + 1)])
+                        [CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method,
+                                        neighbor_type) for _ in range(scale + 1)])
 
                 if self.mlp_or_sum == 'mlp':
                     self.linear = nn.Conv1d(v_out * (scale + 1), q_in, 1, bias=False)
-            
+
             else:
                 raise ValueError(f'key_one_or_sep should be one or sep! but got {self.key_one_or_sep}')
-            
+
         else:
-                raise ValueError(f'single_scale_or_multi_scale should be ss or ms, but got {self.single_scale_or_multi_scale}')
+            raise ValueError(
+                f'single_scale_or_multi_scale should be ss or ms, but got {self.single_scale_or_multi_scale}')
 
         self.ff = nn.Sequential(nn.Conv1d(ff_conv1_channels_in, ff_conv1_channels_out, 1, bias=False),
                                 nn.LeakyReLU(negative_slope=0.2),
@@ -599,10 +336,11 @@ class Point_Embedding(nn.Module):
 
 class ModelNetModel(nn.Module):
     def __init__(self, embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out,
-                 single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
+                 global_or_local, single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
+                 neighbor_selection_method,
                  neighbor_type, mlp_or_sum,
                  q_in, q_out, k_in, k_out, v_in,
-                 v_out, num_heads, ff_conv1_channels_in,
+                 v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
         super(ModelNetModel, self).__init__()
         self.k_out = k_out[0]
@@ -611,23 +349,43 @@ class ModelNetModel(nn.Module):
             [Point_Embedding(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out) for
              embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out in
              zip(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out)])
-        self.Local_CrossAttention_Layer_list = nn.ModuleList(
-            [Local_CrossAttention_Layer(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
-                                  neighbor_selection_method,
-                                  neighbor_type, mlp_or_sum,
-                                  q_in, q_out, k_in, k_out, v_in,
-                                  v_out, num_heads, ff_conv1_channels_in,
-                                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out) for
-             single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
-             neighbor_type, mlp_or_sum,
-             q_in, q_out, k_in, k_out, v_in,
-             v_out, num_heads, ff_conv1_channels_in,
-             ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out in
-             zip(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
+
+        self.global_or_local = global_or_local
+        if self.global_or_local == 'global':
+            self.Global_Attention_Layer_list = nn.ModuleList([Global_Attention_Layer(q_in, q_out, k_in, k_out, v_in,
+                                                                                     v_out, num_heads, Att_Score_method,
+                                                                                     ff_conv1_channels_in,
+                                                                                     ff_conv1_channels_out,
+                                                                                     ff_conv2_channels_in,
+                                                                                     ff_conv2_channels_out) for
+                                                              q_in, q_out, k_in, k_out, v_in, v_out, num_heads,
+                                                              Att_Score_method, ff_conv1_channels_in,
+                                                              ff_conv1_channels_out, ff_conv2_channels_in,
+                                                              ff_conv2_channels_out
+                                                              in
+                                                              zip(q_in, q_out, k_in, k_out, v_in, v_out, num_heads,
+                                                                  Att_Score_method, ff_conv1_channels_in,
+                                                                  ff_conv1_channels_out, ff_conv2_channels_in,
+                                                                  ff_conv2_channels_out)])
+        elif self.global_or_local == 'local':
+            self.Local_CrossAttention_Layer_list = nn.ModuleList(
+                [Local_CrossAttention_Layer(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
+                                            neighbor_selection_method,
+                                            neighbor_type, mlp_or_sum,
+                                            q_in, q_out, k_in, k_out, v_in,
+                                            v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
+                                            ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out) for
+                 single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
                  neighbor_type, mlp_or_sum,
                  q_in, q_out, k_in, k_out, v_in,
-                 v_out, num_heads, ff_conv1_channels_in,
-                 ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out)])
+                 v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
+                 ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out in
+                 zip(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
+                     neighbor_type, mlp_or_sum,
+                     q_in, q_out, k_in, k_out, v_in,
+                     v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
+                     ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out)])
+
         self.linear0 = nn.Sequential(nn.Conv1d(self.k_out * self.num_att_layer, 1024, kernel_size=1, bias=False),
                                      nn.BatchNorm1d(1024),
                                      nn.LeakyReLU(negative_slope=0.2))
@@ -655,15 +413,20 @@ class ModelNetModel(nn.Module):
             x_list.append(x)
         x = torch.cat(x_list, dim=1)  # x.shape == (B, num_layer x C, N)
 
-        # i = 0
-        for Local_CrossAttention_Layer in self.Local_CrossAttention_Layer_list:
-            x = Local_CrossAttention_Layer(x, xyz)
-            # x.shape == (B, C, N)
-            # x_extract = x.max(dim=-1)[0]
-            # x_expand = self.conv_list[i](x).max(dim=-1)[0]  # x_expand.shape == (B, 1024)
-            res_link_list.append(x)
-            # print("x.shape", x.shape)
-            # i += 1
+        if self.global_or_local == 'global':
+            for Global_Attention_Layer in self.Global_Attention_Layer_list:
+                x = Global_Attention_Layer(x)
+                res_link_list.append(x)
+        elif self.global_or_local == 'local':
+            # i = 0
+            for Local_CrossAttention_Layer in self.Local_CrossAttention_Layer_list:
+                x = Local_CrossAttention_Layer(x, xyz)
+                # x.shape == (B, C, N)
+                # x_extract = x.max(dim=-1)[0]
+                # x_expand = self.conv_list[i](x).max(dim=-1)[0]  # x_expand.shape == (B, 1024)
+                res_link_list.append(x)
+                # print("x.shape", x.shape)
+                # i += 1
         x = torch.cat(res_link_list, dim=1)  # x.shape == (B, 4096)  or  (B, 512, N)
         x = self.linear0(x)  # x.shape == (B, 1024, N)
         x = x.max(dim=-1)[0]  # x.shape == (B, 1024)
@@ -678,3 +441,265 @@ class ModelNetModel(nn.Module):
         x = self.linear3(x)
         # x.shape == (B, 40)
         return x
+
+
+# about local attention with position encoding
+"""
+    def pe_sub_energy(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N, K)
+        coordinates = coordinates.permute(0, 3, 2, 1)
+        # coordinates.shape == (B, K, N, 3)
+        pos = self.sub_linear_energy(coordinates)
+        # pos.shape == (B, K, N, H x D)
+        pos = pos.permute(0, 3, 2, 1)
+        # pos.shape == (B, H x D, N, K)
+        pos = self.split_heads(pos, self.num_heads, self.q_depth)
+        # pos.shape == (B, H, N, K, D)
+        pos_trans_value = trans_value + pos
+        return pos_trans_value
+
+    def pe_dot_energy(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N, K)
+        coordinates = coordinates.permute(0, 3, 2, 1)
+        # coordinates.shape == (B, K, N, 3)
+        pos = self.dot_linear_energy(coordinates)
+        # pos.shape == (B, K, N, H)
+        pos = pos[:, :, :, None, :].permute(0, 4, 2, 3, 1)
+        # pos.shape == (B, H, N, 1, K)
+        pos_trans_value = trans_value + pos
+        return pos_trans_value
+
+    def pe_add_cat_energy(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N, K)
+        coordinates = coordinates.permute(0, 3, 2, 1)
+        # coordinates.shape == (B, K, N, 3)
+        pos = self.dot_linear_energy(coordinates).permute(0, 3, 2, 1)
+        # pos.shape == (B, H, N, K)
+        pos_trans_value = trans_value + pos
+        return pos_trans_value
+
+    def pe_dot_q_comb(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N, K)
+        coordinates = coordinates.permute(0, 3, 2, 1)
+        # coordinates.shape == (B, K, N, 3)
+        pos = self.linear_q(coordinates)
+        # pos.shape == (B, K, N, D x H), The last dimension is coordinate projection
+        pos = pos.permute(0, 3, 2, 1)
+        pos = self.split_heads(pos, self.num_heads, self.q_depth)
+        # pos.shape == (B, H, N, K, D)
+        pos_trans_value = trans_value @ pos
+        # pos_trans_value.shape == (B, H, N, 1, K)
+        return pos_trans_value
+
+    def pe_add_cat_q_comb(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N, K)
+        coordinates = coordinates.permute(0, 3, 2, 1)
+        # coordinates.shape == (B, K, N, 3)
+        pos = self.linear_q(coordinates)
+        # pos.shape == (B, K, N, D x H), The last dimension is coordinate projection
+        pos = pos.permute(0, 3, 2, 1)
+        pos = self.split_heads(pos, self.num_heads, self.q_depth)
+        # pos.shape == (B, H, N, K, D)
+        pos_trans_value = pos @ trans_value
+        # pos_trans_value.shape == (B, H, N, K)
+        return pos_trans_value
+
+    "Miss three function for k for position encoding"
+
+    def pe_v_comb(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N, K)
+        coordinates = coordinates.permute(0, 3, 2, 1)
+        # coordinates.shape == (B, K, N, 3)
+        pos = self.linear_q(coordinates)
+        # pos.shape == (B, K, N, D x H), The last dimension is coordinate projection
+        pos = pos.permute(0, 3, 2, 1)
+        pos = self.split_heads(pos, self.num_heads, self.q_depth)
+        # pos.shape == (B, H, N, K, D)
+        pos_trans_value = trans_value + pos
+        # pos_trans_value.shape == (B, H, N, K, D)
+        return pos_trans_value
+    """
+
+# about global attention with positon encoding
+"""
+    if Att_Score_method == 'dot_product':
+        k = k.permute(0, 1, 3, 2)
+        # k.shape == (B, H, D, N)
+        if pos_method == 'method_i':
+            energy = q @ k
+            # energy.shape == (B, H, N, N)
+            energy = self.pe_type_energy(coordinate, energy)
+            v_context = self.pe_type_v_comb(coordinate, v)
+            scale_factor = math.sqrt(q.shape[-1])
+            attention = self.softmax(energy / scale_factor)
+            # attention.shape == (B, H, N, N)
+            x = (attention * v_context).permute(0, 2, 1, 3)
+            # x.shape == (B, N, H, D)
+        elif pos_method == 'method_ii':
+            q_context = self.pe_type_q_comb(coordinate, q)
+            v_context = self.pe_type_v_comb(coordinate, v)
+            energy = q @ k + q_context
+            # energy.shape == (B, H, N, N)
+            scale_factor = math.sqrt(q.shape[-1])
+            attention = self.softmax(energy / scale_factor)
+            # attention.shape == (B, H, N, N)
+            x = (attention * v_context).permute(0, 2, 1, 3)
+            # x.shape == (B, N, H, D)
+        elif pos_method == 'method_iii':
+            q_context = self.pe_type_q_comb(coordinate, q)
+            k_context = self.pe_type_k_comb(coordinate, k)
+            v_context = self.pe_type_v_comb(coordinate, v)
+            energy = q @ k + q_context + k_context
+            # energy.shape == (B, H, N, N)
+            scale_factor = math.sqrt(q.shape[-1])
+            attention = self.softmax(energy / scale_factor)
+            # attention.shape == (B, H, N, N)
+            x = (attention * v_context).permute(0, 2, 1, 3)
+            # x.shape == (B, N, H, D)
+        else:
+            raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
+
+    elif Att_Score_method == 'subtraction':
+        if pos_method == 'method_i':
+            energy = (q - k) @ ((q - k).permute(1, 0))
+            # energy.shape == (B, H, N, N)
+            energy = self.pe_type_energy(coordinate, energy)
+            v_context = self.pe_type_v_comb(coordinate, v)
+            scale_factor = math.sqrt(q.shape[-1])
+            attention = self.softmax(energy / scale_factor)
+            # attention.shape == (B, H, N, N)
+            x = (attention * v_context).permute(0, 2, 1, 3)
+            # x.shape == (B, N, H, D)
+        elif pos_method == 'method_ii':
+            q_context = self.pe_type_q_comb(coordinate, q)
+            energy = (q - k) @ ((q - k).permute(1, 0)) + q_context
+            # energy.shape == (B, H, N, N)
+            v_context = self.pe_type_v_comb(coordinate, v)
+            scale_factor = math.sqrt(q.shape[-1])
+            attention = self.softmax(energy / scale_factor)
+            # attention.shape == (B, H, N, N)
+            x = (attention * v_context).permute(0, 2, 1, 3)
+            # x.shape == (B, N, H, D)
+        elif pos_method == 'method_iii':
+            q_context = self.pe_type_q_comb(coordinate, q)
+            k_context = self.pe_type_k_comb(coordinate, k)
+            v_context = self.pe_type_v_comb(coordinate, v)
+            energy = (q - k) @ ((q - k).permute(1, 0)) + q_context + k_context
+            # energy.shape == (B, H, N, N)
+            scale_factor = math.sqrt(q.shape[-1])
+            attention = self.softmax(energy / scale_factor)
+            # attention.shape == (B, H, N, N)
+            x = (attention * v_context).permute(0, 2, 1, 3)
+            # x.shape == (B, N, H, D)
+        else:
+            raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
+
+    elif Att_Score_method == 'addition':
+        if pos_method == 'method_i':
+            q = q.unsqueeze(-2).repeat(1, 1, 1, q.shape[2], 1)
+            # q.shape == (B, H, N, N, D)
+            k = k.unsqueeze(-2).repeat(1, 1, 1, k.shape[2], 1)
+            # k.shape == (B, H, N, N, D)
+            energy = q + k
+            # energy.shape == (B, H, N, N, D)
+            scale_factor = math.sqrt(q.shape[-1])
+            energy = torch.tanh(energy / scale_factor)
+            # attention.shape == (B, H, N, N, D)
+            energy = energy @ self.p_add
+            energy = self.pe_type_energy(coordinate, energy)
+            attention = self.softmax(energy)
+            # attention.shape == (B, H, N, N)
+            x = (attention * v).permute(0, 2, 1, 3)
+            # x.shape == (B, N, H, D)
+        elif pos_method == 'method_ii':
+            q_context = self.pe_type_q_comb(coordinate, q)
+            v_context = self.pe_type_v_comb(coordinate, v)
+            # q_context.shape == (B, H, N, N)
+            q = q.unsqueeze(-2).repeat(1, 1, 1, q.shape[2], 1)
+            # q.shape == (B, H, N, N, D)
+            k = k.unsqueeze(-2).repeat(1, 1, 1, k.shape[2], 1)
+            # k.shape == (B, H, N, N, D)
+            energy = q + k
+            # energy.shape == (B, H, N, N, D)
+            scale_factor = math.sqrt(q.shape[-1])
+            energy = torch.tanh(energy / scale_factor)
+            # attention.shape == (B, H, N, N, D)
+            energy = energy @ self.p_add + q_context
+            # energy.shape == (B, H, N, N)
+            attention = self.softmax(energy)
+            # attention.shape == (B, H, N, N)
+            x = (attention * v_context).permute(0, 2, 1, 3)
+            # x.shape == (B, N, H, D)
+        elif pos_method == 'method_iii':
+            q_context = self.pe_type_q_comb(coordinate, q)
+            k_context = self.pe_type_k_comb(coordinate, k)
+            v_context = self.pe_type_v_comb(coordinate, v)
+            # q_context.shape == (B, H, N, N)
+            q = q.unsqueeze(-2).repeat(1, 1, 1, q.shape[2], 1)
+            # q.shape == (B, H, N, N, D)
+            k = k.unsqueeze(-2).repeat(1, 1, 1, k.shape[2], 1)
+            # k.shape == (B, H, N, N, D)
+            energy = q + k
+            # energy.shape == (B, H, N, N, D)
+            scale_factor = math.sqrt(q.shape[-1])
+            energy = torch.tanh(energy / scale_factor)
+            # attention.shape == (B, H, N, N, D)
+            energy = energy @ self.p_add + q_context + k_context
+            # energy.shape == (B, H, N, N)
+            attention = self.softmax(energy)
+            # attention.shape == (B, H, N, N)
+            x = (attention * v_context).permute(0, 2, 1, 3)
+            # x.shape == (B, N, H, D)
+            
+            
+                def pe_type_q_comb(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N)
+        coordinates = coordinates.permute(0, 2, 1)
+        # coordinates.shape == (B, N, 3)
+        pos = self.linear_q(coordinates)
+        # pos.shape == (B, N, D x H), The last dimension is coordinate projection
+        pos = pos.permute(0, 2, 1)
+        pos = self.global_split_heads(pos, self.num_heads, self.q_depth)
+        # pos.shape == (B, H, N, D)
+        pos_trans_value = trans_value @ pos.permute(0, 1, 3, 2)
+        # pos_trans_value.shape == (B, H, N, N)
+        return pos_trans_value
+
+    def pe_type_k_comb(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N)
+        coordinates = coordinates.permute(0, 2, 1)
+        # coordinates.shape == (B, N, 3)
+        pos = self.linear_k(coordinates)
+        # pos.shape == (B, N, D x H), The last dimension is coordinate projection
+        pos = pos.permute(0, 2, 1)
+        pos = self.global_split_heads(pos, self.num_heads, self.k_depth)
+        # pos.shape == (B, H, N, D)
+        pos_trans_value = trans_value @ pos.permute(0, 1, 3, 2)
+        # pos_trans_value.shape == (B, H, N, N)
+        return pos_trans_value
+
+    def pe_type_v_comb(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N)
+        coordinates = coordinates.permute(0, 2, 1)
+        # coordinates.shape == (B, N, 3)
+        pos = self.linear_v(coordinates)
+        # pos.shape == (B, N, D x H), The last dimension is coordinate projection
+        pos = pos.permute(0, 2, 1)
+        pos = self.global_split_heads(pos, self.num_heads, self.v_depth)
+        # pos.shape == (B, H, N, D)
+        pos_trans_value = trans_value + pos
+        return pos_trans_value
+        
+    def pe_type_energy(self, coordinates, trans_value):
+        # coordinates.shape == (B, 3, N)
+        coordinates = coordinates.permute(0, 2, 1)
+        # coordinates.shape == (B, N, 3)
+        pos = self.linear_energy(coordinates)
+        # pos.shape == (B, N, N x H), The last dimension is coordinate projection
+        pos = pos.permute(0, 2, 1)
+        # pos.shape == (B, N x H, N)
+        pos = self.global_split_heads(pos, self.num_heads, self.num_points)
+        # pos.shape == (B, H, N, N)
+        pos_trans_value = trans_value + pos
+        return pos_trans_value
+"""
