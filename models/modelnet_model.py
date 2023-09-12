@@ -7,20 +7,20 @@ from models.attention_variants import Local_based_attention_variation, Global_ba
 
 class SelfAttention(nn.Module):
     def __init__(self, q_in=64, q_out=64, k_in=64, k_out=64, v_in=64, v_out=64, num_heads=8,
-                 Att_Score_method='global_dot'):
+                 att_score_method='global_dot'):
         super(SelfAttention, self).__init__()
         # check input values
         if k_in != v_in:
             raise ValueError(f'k_in and v_in should be the same! Got k_in:{k_in}, v_in:{v_in}')
         if q_out != k_out:
             raise ValueError('q_out should be equal to k_out!')
-        if q_out % num_heads != 0 or k_out % num_heads != 0 or v_out % num_heads != 0:
-            raise ValueError('please set another value for num_heads!')
         if q_out != v_out:
             raise ValueError('Please check the dimension of energy')
+        if q_out % num_heads != 0 or k_out % num_heads != 0 or v_out % num_heads != 0:
+            raise ValueError('please set another value for num_heads!')
         # print('q_out, k_out, v_out are same')
         self.Global_based_attention_variation = Global_based_attention_variation()
-        self.Att_Score_method = Att_Score_method
+        self.att_score_method = att_score_method
         self.num_heads = num_heads
         self.q_depth = int(q_out / num_heads)
         self.k_depth = int(k_out / num_heads)
@@ -46,14 +46,14 @@ class SelfAttention(nn.Module):
         v = self.global_split_heads(v, self.num_heads, self.v_depth)
         # v.shape == (B, H, N, D)
 
-        if self.Att_Score_method == 'global_dot':
+        if self.att_score_method == 'global_dot':
             x = self.Global_based_attention_variation.global_attention_Dot(q, k, v)
 
-        elif self.Att_Score_method == 'global_sub':
+        elif self.att_score_method == 'global_sub':
             x = self.Global_based_attention_variation.global_attention_Sub(q, k, v)
             print("succeed using glosub", x.shape)
         else:
-            raise ValueError(f"Att_Score_method must be 'global_dot', 'global_sub'. Got: {self.Att_Score_method}")
+            raise ValueError(f"att_score_method must be 'global_dot', 'global_sub'. Got: {self.att_score_method}")
 
         x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
         # x.shape == (B, C, N)
@@ -68,15 +68,15 @@ class SelfAttention(nn.Module):
         return x
 
 
-class Global_Attention_Layer(nn.Module):
-    def __init__(self, q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method,
+class Global_SelfAttention_Layer(nn.Module):
+    def __init__(self, q_in, q_out, k_in, k_out, v_in, v_out, num_heads, att_score_method,
                  ff_conv1_channels_in, ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
-        super(Global_Attention_Layer, self).__init__()
+        super(Global_SelfAttention_Layer, self).__init__()
 
         if q_in != v_out:
             raise ValueError(f'q_in should be equal to v_out due to ResLink! Got q_in: {q_in}, v_out: {v_out}')
-        self.Att_Score_method = Att_Score_method
-        self.sa = SelfAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method)
+        self.att_score_method = att_score_method
+        self.sa = SelfAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, att_score_method)
         self.ff = nn.Sequential(nn.Conv1d(ff_conv1_channels_in, ff_conv1_channels_out, 1, bias=False),
                                 nn.LeakyReLU(negative_slope=0.2),
                                 nn.Conv1d(ff_conv2_channels_in, ff_conv2_channels_out, 1, bias=False))
@@ -93,10 +93,10 @@ class Global_Attention_Layer(nn.Module):
 
 class CrossAttention(nn.Module):
     def __init__(self, q_in=64, q_out=64, k_in=64, k_out=64, v_in=64, v_out=64, num_heads=8,
-                 Att_Score_method='local_scalar_dot', neighbor_type='diff'):
+                 att_score_method='local_scalar_dot', neighbor_type='diff'):
         super(CrossAttention, self).__init__()
         # check input values
-        print("number head", num_heads)
+
         if k_in != v_in:
             raise ValueError(f'k_in and v_in should be the same! Got k_in:{k_in}, v_in:{v_in}')
         if q_out != k_out:
@@ -106,15 +106,14 @@ class CrossAttention(nn.Module):
         if q_out % num_heads != 0 or k_out % num_heads != 0 or v_out % num_heads != 0:
             raise ValueError('please set another value for num_heads!')
         # print('q_out, k_out, v_out are same')
-        self.Att_Score_method = Att_Score_method
+        self.att_score_method = att_score_method
         self.neighbor_type = neighbor_type
         self.num_heads = num_heads
         self.q_depth = int(q_out / num_heads)
         self.k_depth = int(k_out / num_heads)
         self.v_depth = int(v_out / num_heads)
         self.softmax = nn.Softmax(dim=-1)
-        self.Local_based_attention_variation = Local_based_attention_variation(k_out, num_heads, Att_Score_method)
-        self.Global_based_attention_variation = Global_based_attention_variation()
+        self.Local_based_attention_variation = Local_based_attention_variation(k_out, num_heads, att_score_method)
         if self.neighbor_type == 'diff' or self.neighbor_type == 'neighbor':
             self.q_conv = nn.Conv2d(q_in, q_out, 1, bias=False)
             self.k_conv = nn.Conv2d(k_in, k_out, 1, bias=False)
@@ -152,26 +151,26 @@ class CrossAttention(nn.Module):
         k = k.permute(0, 1, 2, 4, 3)
         # k.shape == (B, H, N, D, K)
 
-        if self.Att_Score_method == 'local_scalar_dot':
+        if self.att_score_method == 'local_scalar_dot':
             x = self.Local_based_attention_variation.local_attention_scalarDot(q, k, v)
-
-        elif self.Att_Score_method == 'local_scalar_sub':
+            # print("8 2048 4 32", x.shape)
+        elif self.att_score_method == 'local_scalar_sub':
             x = self.Local_based_attention_variation.local_attention_scalarSub(q, k, v)
 
-        elif self.Att_Score_method == 'local_scalar_add':
+        elif self.att_score_method == 'local_scalar_add':
             x = self.Local_based_attention_variation.local_attention_scalarAdd(q, k, v)
 
-        elif self.Att_Score_method == 'local_scalar_cat':
+        elif self.att_score_method == 'local_scalar_cat':
             x = self.Local_based_attention_variation.local_attention_scalarCat(q, k, v)
 
-        elif self.Att_Score_method == 'local_vector_sub':
+        elif self.att_score_method == 'local_vector_sub':
             x = self.Local_based_attention_variation.local_attention_vectorSub(q, k, v)
 
-        elif self.Att_Score_method == 'local_vector_add':
+        elif self.att_score_method == 'local_vector_add':
             x = self.Local_based_attention_variation.local_attention_vectorAdd(q, k, v)
 
         else:
-            raise ValueError(f'Invalid value for Att_Score_method: {self.Att_Score_method}')
+            raise ValueError(f'Invalid value for att_score_method: {self.att_score_method}')
 
         x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
         # x.shape == (B, C, N)
@@ -191,7 +190,7 @@ class Local_CrossAttention_Layer(nn.Module):
     def __init__(self, single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
                  neighbor_type, mlp_or_sum,
                  q_in, q_out, k_in, k_out, v_in,
-                 v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
+                 v_out, num_heads, att_score_method, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
         super(Local_CrossAttention_Layer, self).__init__()
 
@@ -208,22 +207,22 @@ class Local_CrossAttention_Layer(nn.Module):
             raise ValueError(f'q_in should be equal to v_out due to ResLink! Got q_in: {q_in}, v_out: {v_out}')
 
         if self.single_scale_or_multi_scale == 'ss':
-            self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method, neighbor_type)
+            self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, att_score_method, neighbor_type)
 
         elif self.single_scale_or_multi_scale == 'ms':
 
             if self.key_one_or_sep == 'one':
-                self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method,
+                self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, att_score_method,
                                          neighbor_type)
 
             elif self.key_one_or_sep == 'sep':
 
                 if self.shared_ca:
-                    self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method,
+                    self.ca = CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, att_score_method,
                                              neighbor_type)
                 else:
                     self.ca_list = nn.ModuleList(
-                        [CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, Att_Score_method,
+                        [CrossAttention(q_in, q_out, k_in, k_out, v_in, v_out, num_heads, att_score_method,
                                         neighbor_type) for _ in range(scale + 1)])
 
                 if self.mlp_or_sum == 'mlp':
@@ -334,15 +333,15 @@ class Point_Embedding(nn.Module):
         return x
 
 
-class ModelNetModel(nn.Module):
+class ModelNetModelCls(nn.Module):
     def __init__(self, embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out,
                  global_or_local, single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
                  neighbor_selection_method,
                  neighbor_type, mlp_or_sum,
                  q_in, q_out, k_in, k_out, v_in,
-                 v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
+                 v_out, num_heads, att_score_method, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out):
-        super(ModelNetModel, self).__init__()
+        super(ModelNetModelCls, self).__init__()
         self.k_out = k_out[0]
         self.num_att_layer = len(k_out)
         self.Point_Embedding_list = nn.ModuleList(
@@ -352,38 +351,39 @@ class ModelNetModel(nn.Module):
 
         self.global_or_local = global_or_local
         if self.global_or_local == 'global':
-            self.Global_Attention_Layer_list = nn.ModuleList([Global_Attention_Layer(q_in, q_out, k_in, k_out, v_in,
-                                                                                     v_out, num_heads, Att_Score_method,
-                                                                                     ff_conv1_channels_in,
-                                                                                     ff_conv1_channels_out,
-                                                                                     ff_conv2_channels_in,
-                                                                                     ff_conv2_channels_out) for
-                                                              q_in, q_out, k_in, k_out, v_in, v_out, num_heads,
-                                                              Att_Score_method, ff_conv1_channels_in,
-                                                              ff_conv1_channels_out, ff_conv2_channels_in,
-                                                              ff_conv2_channels_out
-                                                              in
-                                                              zip(q_in, q_out, k_in, k_out, v_in, v_out, num_heads,
-                                                                  Att_Score_method, ff_conv1_channels_in,
-                                                                  ff_conv1_channels_out, ff_conv2_channels_in,
-                                                                  ff_conv2_channels_out)])
+            self.Global_SelfAttention_Layer_list = nn.ModuleList(
+                [Global_SelfAttention_Layer(q_in, q_out, k_in, k_out, v_in,
+                                            v_out, num_heads, att_score_method,
+                                            ff_conv1_channels_in,
+                                            ff_conv1_channels_out,
+                                            ff_conv2_channels_in,
+                                            ff_conv2_channels_out) for
+                 q_in, q_out, k_in, k_out, v_in, v_out, num_heads,
+                 att_score_method, ff_conv1_channels_in,
+                 ff_conv1_channels_out, ff_conv2_channels_in,
+                 ff_conv2_channels_out
+                 in
+                 zip(q_in, q_out, k_in, k_out, v_in, v_out, num_heads,
+                     att_score_method, ff_conv1_channels_in,
+                     ff_conv1_channels_out, ff_conv2_channels_in,
+                     ff_conv2_channels_out)])
         elif self.global_or_local == 'local':
             self.Local_CrossAttention_Layer_list = nn.ModuleList(
                 [Local_CrossAttention_Layer(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
                                             neighbor_selection_method,
                                             neighbor_type, mlp_or_sum,
                                             q_in, q_out, k_in, k_out, v_in,
-                                            v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
+                                            v_out, num_heads, att_score_method, ff_conv1_channels_in,
                                             ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out) for
                  single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
                  neighbor_type, mlp_or_sum,
                  q_in, q_out, k_in, k_out, v_in,
-                 v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
+                 v_out, num_heads, att_score_method, ff_conv1_channels_in,
                  ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out in
                  zip(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale, neighbor_selection_method,
                      neighbor_type, mlp_or_sum,
                      q_in, q_out, k_in, k_out, v_in,
-                     v_out, num_heads, Att_Score_method, ff_conv1_channels_in,
+                     v_out, num_heads, att_score_method, ff_conv1_channels_in,
                      ff_conv1_channels_out, ff_conv2_channels_in, ff_conv2_channels_out)])
 
         self.linear0 = nn.Sequential(nn.Conv1d(self.k_out * self.num_att_layer, 1024, kernel_size=1, bias=False),
@@ -414,8 +414,8 @@ class ModelNetModel(nn.Module):
         x = torch.cat(x_list, dim=1)  # x.shape == (B, num_layer x C, N)
 
         if self.global_or_local == 'global':
-            for Global_Attention_Layer in self.Global_Attention_Layer_list:
-                x = Global_Attention_Layer(x)
+            for Global_SelfAttention_Layer in self.Global_SelfAttention_Layer_list:
+                x = Global_SelfAttention_Layer(x)
                 res_link_list.append(x)
         elif self.global_or_local == 'local':
             # i = 0
@@ -522,7 +522,7 @@ class ModelNetModel(nn.Module):
 
 # about global attention with positon encoding
 """
-    if Att_Score_method == 'dot_product':
+    if att_score_method == 'dot_product':
         k = k.permute(0, 1, 3, 2)
         # k.shape == (B, H, D, N)
         if pos_method == 'method_i':
@@ -559,7 +559,7 @@ class ModelNetModel(nn.Module):
         else:
             raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
 
-    elif Att_Score_method == 'subtraction':
+    elif att_score_method == 'subtraction':
         if pos_method == 'method_i':
             energy = (q - k) @ ((q - k).permute(1, 0))
             # energy.shape == (B, H, N, N)
@@ -594,7 +594,7 @@ class ModelNetModel(nn.Module):
         else:
             raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
 
-    elif Att_Score_method == 'addition':
+    elif att_score_method == 'addition':
         if pos_method == 'method_i':
             q = q.unsqueeze(-2).repeat(1, 1, 1, q.shape[2], 1)
             # q.shape == (B, H, N, N, D)
@@ -650,8 +650,8 @@ class ModelNetModel(nn.Module):
             # attention.shape == (B, H, N, N)
             x = (attention * v_context).permute(0, 2, 1, 3)
             # x.shape == (B, N, H, D)
-            
-            
+
+
                 def pe_type_q_comb(self, coordinates, trans_value):
         # coordinates.shape == (B, 3, N)
         coordinates = coordinates.permute(0, 2, 1)
@@ -689,7 +689,7 @@ class ModelNetModel(nn.Module):
         # pos.shape == (B, H, N, D)
         pos_trans_value = trans_value + pos
         return pos_trans_value
-        
+
     def pe_type_energy(self, coordinates, trans_value):
         # coordinates.shape == (B, 3, N)
         coordinates = coordinates.permute(0, 2, 1)
