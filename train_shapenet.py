@@ -1,4 +1,9 @@
+import io
 import shutil
+import sys
+
+from ptflops import get_model_complexity_info
+import thop
 from utils import dataloader, lr_scheduler
 from models import shapenet_model
 from omegaconf import OmegaConf
@@ -151,6 +156,15 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
 
     # get ddp model
     my_model = my_model.to(device)
+
+    def prepare_input(resolution):
+        x1 = torch.FloatTensor(1, 3, 2048).to(device)
+        x2 = torch.FloatTensor(1, 16, 1).to(device)
+        return dict(x=x1, category_id=x2)
+    flops, params = get_model_complexity_info(my_model, input_res=((3, 2048), (16, 1)), input_constructor=prepare_input,
+                                              as_strings=True, print_per_layer_stat=True)
+    print('      - Flops:  ' + flops)
+    print('      - Params: ' + params)
     my_model = torch.nn.parallel.DistributedDataParallel(my_model)
 
     # add fp hook and bp hook
@@ -224,18 +238,11 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
     else:
         loss_fn = torch.nn.CrossEntropyLoss(reduction='mean')
 
-    if config.neighbor2point_block.enable:
-        num_ds_layers = len(config.neighbor2point_block.downsample.K)
-    elif config.point2point_block.enable:
-        num_ds_layers = len(config.point2point_block.downsample.K)
-    elif config.edgeconv_block.enable:
-        num_ds_layers = len(config.edgeconv_block.downsample.K)
-    else:
-        raise ValueError('One of neighbor2point_block, point2point_block and edgeconv_block should be enabled!')
+
     val_miou_list = [0]
     val_category_miou_list = [0]
-    val_ds_miou_list = [[0] for _ in range(num_ds_layers)]
-    val_ds_category_miou_list = [[0] for _ in range(num_ds_layers)]
+
+
     # start training
     for epoch in range(config.train.epochs):
         my_model.train()
@@ -357,8 +364,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
             pred_list = []
             seg_label_list = []
             cls_label_list = []
-            ds_pred_list = [[] for _ in range(num_ds_layers)]
-            ds_seg_label_list = [[] for _ in range(num_ds_layers)]
+
             with torch.no_grad():
                 for samples, seg_labels, cls_label in validation_loader:
                     samples, seg_labels, cls_label = samples.to(device), seg_labels.to(device), cls_label.to(device)
@@ -369,13 +375,12 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                     pred_gather_list = [torch.empty_like(preds).to(device) for _ in range(config.train.ddp.nproc_this_node)]
                     seg_label_gather_list = [torch.empty_like(seg_labels).to(device) for _ in range(config.train.ddp.nproc_this_node)]
                     cls_label_gather_list = [torch.empty_like(cls_label).to(device) for _ in range(config.train.ddp.nproc_this_node)]
-                    ds_idx_gather_list = [[torch.empty_like(my_model.module.block.downsample_list[which_layer].idx).to(device) for _ in range(config.train.ddp.nproc_this_node)] for which_layer in range(num_ds_layers)]
+
                     torch.distributed.all_gather(pred_gather_list, preds)
                     torch.distributed.all_gather(seg_label_gather_list, seg_labels)
                     torch.distributed.all_gather(cls_label_gather_list, cls_label)
                     torch.distributed.all_reduce(val_loss)
-                    for which_layer in range(num_ds_layers):
-                        torch.distributed.all_gather(ds_idx_gather_list[which_layer], my_model.module.block.downsample_list[which_layer].idx)
+
                     if rank == 0:
                         preds = torch.concat(pred_gather_list, dim=0)
                         preds = torch.max(preds.permute(0, 2, 1), dim=2)[1]
@@ -387,15 +392,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                         cls_label_list.append(torch.max(cls_label[:, :, 0], dim=1)[1].detach().cpu().numpy())
                         val_loss /= config.train.ddp.nproc_this_node
                         val_loss_list.append(val_loss.detach().cpu().numpy())
-                        for which_layer in range(num_ds_layers):
-                            ds_idx = torch.concat(ds_idx_gather_list[which_layer], dim=0)[:, 0, :]
-                            if which_layer > 0:  # idx mapping
-                                ds_idx = torch.gather(ds_idx_last_layer, dim=1, index=ds_idx)
-                            ds_preds = torch.gather(preds, dim=1, index=ds_idx)
-                            ds_seg_labels = torch.gather(seg_labels, dim=1, index=ds_idx)
-                            ds_pred_list[which_layer].append(ds_preds.detach().cpu().numpy())
-                            ds_seg_label_list[which_layer].append(ds_seg_labels.detach().cpu().numpy())
-                            ds_idx_last_layer = ds_idx.clone()
+
 
             # calculate metrics
             if rank == 0:
@@ -409,20 +406,12 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                 val_loss = sum(val_loss_list) / len(val_loss_list)
                 val_ds_miou = []
                 val_ds_category_miou = []
-                for ds_preds, ds_seg_labels in zip(ds_pred_list, ds_seg_label_list):
-                    ds_preds = np.concatenate(ds_preds, axis=0)
-                    ds_seg_labels = np.concatenate(ds_seg_labels, axis=0)
-                    ds_shape_ious = metrics.calculate_shape_IoU(ds_preds, ds_seg_labels, cls_label, config.datasets.mapping)
-                    ds_category_iou = list(metrics.calculate_category_IoU(ds_shape_ious, cls_label, config.datasets.mapping).values())
-                    val_ds_miou.append(sum(ds_shape_ious) / len(ds_shape_ious))
-                    val_ds_category_miou.append(sum(ds_category_iou) / len(ds_category_iou))
+
 
             # log results
             if rank == 0:
                 display_list = [('lr', current_lr), ('train_loss', train_loss), ('train_mIoU', train_miou), ('val_loss', val_loss), ('val_mIoU', val_miou), ('val_category_mIoU', val_category_miou)]
-                for which_layer in range(num_ds_layers):
-                    display_list.append((f'val_dsLayer{which_layer+1}_mIoU', val_ds_miou[which_layer]))
-                    display_list.append((f'val_dsLayer{which_layer+1}_category_mIoU', val_ds_category_miou[which_layer]))
+
                 kbar.update(i+1, values=display_list)
                 if config.wandb.enable:
                     # save model
@@ -434,14 +423,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                     metric_dict = {'shapenet_val': {'loss': val_loss, 'mIoU': val_miou}, 'category_mIoU': val_category_miou}
                     metric_dict['shapenet_val']['best_mIoU'] = max(val_miou_list)
                     metric_dict['shapenet_val']['best_category_mIoU'] = max(val_category_miou_list)
-                    for which_layer in range(num_ds_layers):
-                        metric_dict['shapenet_val'][f'dsLayer{which_layer+1}_mIoU'] = val_ds_miou[which_layer]
-                        metric_dict['shapenet_val'][f'dsLayer{which_layer+1}_category_mIoU'] = val_ds_category_miou[which_layer]
-                        val_ds_miou_list[which_layer].append(val_ds_miou[which_layer])
-                        val_ds_category_miou_list[which_layer].append(val_ds_category_miou[which_layer])
-                        metric_dict['shapenet_val'][f'best_dsLayer{which_layer+1}_mIoU'] = max(val_ds_miou_list[which_layer])
-                        metric_dict['shapenet_val'][f'best_dsLayer{which_layer+1}_category_mIoU'] = max(val_ds_category_miou_list[which_layer])
-                    wandb.log(metric_dict, commit=True)
+
         else:
             if rank == 0:
                 kbar.update(i+1, values=[('lr', current_lr), ('train_loss', train_loss), ('train_mIoU', train_miou)])
