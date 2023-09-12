@@ -389,19 +389,17 @@ class ShapeNetModelSeg(nn.Module):
         self.linear0 = nn.Sequential(nn.Conv1d(self.k_out * self.num_att_layer, 1024, kernel_size=1, bias=False),
                                      nn.BatchNorm1d(1024),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear1 = nn.Sequential(nn.Conv1d(1600, 512), nn.BatchNorm1d(512),
+        self.linear1 = nn.Sequential(nn.Conv1d(1600, 512, kernel_size=1, bias=False), nn.BatchNorm1d(512),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear2 = nn.Sequential(nn.Conv1d(512, 256), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
+        self.linear2 = nn.Sequential(nn.Conv1d(512, 256, kernel_size=1, bias=False), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
 
         self.conv1 = nn.Sequential(nn.Conv1d(16, 64, kernel_size=1, bias=False),
                                    nn.BatchNorm1d(64),
                                    nn.LeakyReLU(negative_slope=0.2))
         self.dp1 = nn.Dropout(p=0.5)
         self.dp2 = nn.Dropout(p=0.5)
-        self.conv4 = nn.Sequential(nn.Conv1d(256, 128, kernel_size=1, bias=False),
-                                   nn.BatchNorm1d(128),
-                                   nn.LeakyReLU(negative_slope=0.2))
-        self.conv5 = nn.Conv1d(128, 50, kernel_size=1, bias=False)
+
+        self.conv4 = nn.Conv1d(256, 50, kernel_size=1, bias=False)
 
         # self.conv_list = nn.ModuleList(
         # [nn.Conv1d(channel_in, 1024, kernel_size=1, bias=False) for channel_in in ff_conv2_channels_out])
@@ -438,7 +436,9 @@ class ShapeNetModelSeg(nn.Module):
         x_cat = torch.cat(res_link_list, dim=1)  # (B, 512, N)
         x = self.linear0(x_cat)  # x.shape == (B, 1024, N)
         x = x.max(dim=-1)[0]  # x.shape == (B, 1024)
+        x = x.unsqueeze(2)  # x.shape == (B, 1024, 1)
         category_id = self.conv1(category_id)
+
         # category_id.shape == (B, 64, 1)
         x = torch.cat([x, category_id], dim=1)
         # x.shape === (B, 1024+64, 1)
@@ -455,7 +455,5 @@ class ShapeNetModelSeg(nn.Module):
         x = self.dp2(x)
         # x.shape == (B, 256, N)
         x = self.conv4(x)
-        # x.shape == (B, 128, N)
-        x = self.conv5(x)
         # x.shape == (B, 50, N)
         return x
