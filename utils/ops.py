@@ -136,14 +136,14 @@ def group(pcd, coordinate, K, scale, neighbor_selection_method, group_type):
                          f'but got {group_type}')
     return output, idx  # or add coordinate info (+4)
 
-def select_neighbors_single_scale(pcd, coordinate, K, scale, neighbor_selection_method, neighbor_type):
 
+def select_neighbors_single_scale(pcd, coordinate, K, scale, neighbor_selection_method, neighbor_type):
     pcd = pcd.permute(0, 2, 1)  # pcd.shape == (B, N, C)
     coordinate = coordinate.permute(0, 2, 1)  # coordinate.shape == (B, N, C)
     if neighbor_selection_method == 'coordinate':
         idx = knn(coordinate, coordinate, K * 2 ** scale)  # idx.shape == (B, N, K)
     elif neighbor_selection_method == 'feature':
-        idx = knn(pcd, pcd, K * 2 ** scale)    # idx.shape == (B, N, K)
+        idx = knn(pcd, pcd, K * 2 ** scale)  # idx.shape == (B, N, K)
     else:
         raise ValueError(
             f'neighbor_selection_method should be coordinate or feature, but got {neighbor_selection_method}')
@@ -154,7 +154,6 @@ def select_neighbors_single_scale(pcd, coordinate, K, scale, neighbor_selection_
     neighbors = index_points(pcd, idx)[:, :, start_idx:end_idx:step, :]  # neighbor.shape == (B, N, K, C)
     # print("neighbor.shape", neighbor.shape)
     idx_all = idx[:, :, start_idx:end_idx:step]
- 
 
     if neighbor_type == 'neighbor':
         output = neighbors  # output.shape == (B, N, K, C)
@@ -163,22 +162,24 @@ def select_neighbors_single_scale(pcd, coordinate, K, scale, neighbor_selection_
         diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
         output = diff  # output.shape == (B, N, K, C)
     elif neighbor_type == 'center_neighbor':
-        output = torch.cat([pcd[:, :, None, :], neighbors], dim=3)  # output.shape == (B, N, K, 2C)
+        output = torch.cat([pcd.unsqueeze(2).expand(-1, -1, K, -1), neighbors], dim=3)  # output.shape == (B, N, K, 2C)
+
     elif neighbor_type == 'center_diff':
         diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
-        output = torch.cat([pcd[:, :, None, :], diff], dim=3)  # output.shape == (B, N, K, 2C)
+        output = torch.cat([pcd.unsqueeze(2).expand(-1, -1, K, -1), diff], dim=3)  # output.shape == (B, N, K, 2C)
     elif neighbor_type == 'neighbor_diff':
         diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
-        output = torch.cat([neighbors, neighbors - diff])  # output.shape == (B, N, K, 2C)
+        output = torch.cat([neighbors, neighbors - diff], dim=3)  # output.shape == (B, N, K, 2C)
     elif neighbor_type == 'center_neighbor_diff':
         diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
-        output = torch.cat([pcd[:, :, None, :], neighbors, diff], dim=3)  # output.shape == (B, N, K, 3C)
+        output = torch.cat([pcd.unsqueeze(2).expand(-1, -1, K, -1), neighbors, diff], dim=3)  # output.shape == (B, N, K, 3C)
     else:
         raise ValueError(f'group_type should be "neighbor", "diff", "center_neighbor", "center_diff", '
                          f'"neighbor_diff", "center_neighbor_diff" but got {neighbor_type}')
 
     return output, idx_all
-    
+
+
 #  in one key
 def select_neighbors_in_one_key(pcd, coordinate, K, scale, neighbor_selection_method, neighbor_type):
     pcd = pcd.permute(0, 2, 1)  # pcd.shape == (B, N, C)
@@ -193,12 +194,12 @@ def select_neighbors_in_one_key(pcd, coordinate, K, scale, neighbor_selection_me
             f'neighbor_selection_method should be coordinate or feature, but got {neighbor_selection_method}')
     neighbors = []
     idx_all = []
-    for i in range(scale+1):
+    for i in range(scale + 1):
         start_idx = K * (2 ** i - 1)
         end_idx = K * (2 ** (i + 1) - 1)
         step = 2 ** i
         neighbor = index_points(pcd, idx)[:, :, start_idx:end_idx:step, :]
-        #print("neighbor.shape", neighbor.shape)
+        # print("neighbor.shape", neighbor.shape)
         # neighbor.shape == (B, N, K, C)
         part_idx = idx[:, :, start_idx:end_idx:step]
         neighbors.append(neighbor)
@@ -250,7 +251,7 @@ def select_neighbors_in_separate_key(pcd, coordinate, K, scale, neighbor_selecti
         step = 2 ** scale
         neighbors = index_points(pcd, idx)[:, :, start_idx:end_idx:step, :]  # neighbor.shape == (B, N, K, C)
         # print("neighbor.shape", neighbor.shape)
-        
+
         part_idx = idx[:, :, start_idx:end_idx:step]
         neighbor_list.append(neighbors)
         idx_all.append(part_idx)
@@ -281,14 +282,16 @@ def select_neighbors_in_separate_key(pcd, coordinate, K, scale, neighbor_selecti
 
     return output, idx_all
 
+
 def list_generator(neighbors, K, scale):
     sliced_tensors = []
     for i in range(scale + 1):
         start_idx = i * K
         end_idx = start_idx + K
-        sliced_tensor = neighbors[:, :, :, start_idx:end_idx] 
+        sliced_tensor = neighbors[:, :, :, start_idx:end_idx]
         sliced_tensors.append(sliced_tensor)
     return sliced_tensors
+
 
 """
 def operation_mode(operation_mode, query, keys):
@@ -302,4 +305,3 @@ def operation_mode(operation_mode, query, keys):
         raise ValueError(f'Unsupported operation mode: {operation_mode}. It should be multiple, addition or '
                          f'subtraction.')
 """
-
