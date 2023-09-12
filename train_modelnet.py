@@ -160,32 +160,32 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
             'modelnet40 has only train_set and test_set, which means validation_set is included in train_set!')
 
     # get model
-    my_model = modelnet_model.ModelNetModel(config['Point_Embedding']['embedding_k'],
-                                            config['Point_Embedding']['point_emb1_in'],
-                                            config['Point_Embedding']['point_emb1_out'],
-                                            config['Point_Embedding']['point_emb2_in'],
-                                            config['Point_Embedding']['point_emb2_out'],
-                                            config['Local_CrossAttention_layer']['global_or_local'],
-                                            config['Local_CrossAttention_layer']['single_scale_or_multi_scale'],
-                                            config['Local_CrossAttention_layer']['key_one_or_sep'],
-                                            config['Local_CrossAttention_layer']['shared_ca'],
-                                            config['Local_CrossAttention_layer']['K'],
-                                            config['Local_CrossAttention_layer']['scale'],
-                                            config['Local_CrossAttention_layer']['neighbor_selection_method'],
-                                            config['Local_CrossAttention_layer']['neighbor_type'],
-                                            config['Local_CrossAttention_layer']['mlp_or_sum'],
-                                            config['Local_CrossAttention_layer']['q_in'],
-                                            config['Local_CrossAttention_layer']['q_out'],
-                                            config['Local_CrossAttention_layer']['k_in'],
-                                            config['Local_CrossAttention_layer']['k_out'],
-                                            config['Local_CrossAttention_layer']['v_in'],
-                                            config['Local_CrossAttention_layer']['v_out'],
-                                            config['Local_CrossAttention_layer']['num_heads'],
-                                            config['Local_CrossAttention_layer']['Att_Score_method'],
-                                            config['Local_CrossAttention_layer']['ff_conv1_channels_in'],
-                                            config['Local_CrossAttention_layer']['ff_conv1_channels_out'],
-                                            config['Local_CrossAttention_layer']['ff_conv2_channels_in'],
-                                            config['Local_CrossAttention_layer']['ff_conv2_channels_out'])
+    my_model = modelnet_model.ModelNetModelCls(config['Point_Embedding']['embedding_k'],
+                                               config['Point_Embedding']['point_emb1_in'],
+                                               config['Point_Embedding']['point_emb1_out'],
+                                               config['Point_Embedding']['point_emb2_in'],
+                                               config['Point_Embedding']['point_emb2_out'],
+                                               config['Local_CrossAttention_layer']['global_or_local'],
+                                               config['Local_CrossAttention_layer']['single_scale_or_multi_scale'],
+                                               config['Local_CrossAttention_layer']['key_one_or_sep'],
+                                               config['Local_CrossAttention_layer']['shared_ca'],
+                                               config['Local_CrossAttention_layer']['K'],
+                                               config['Local_CrossAttention_layer']['scale'],
+                                               config['Local_CrossAttention_layer']['neighbor_selection_method'],
+                                               config['Local_CrossAttention_layer']['neighbor_type'],
+                                               config['Local_CrossAttention_layer']['mlp_or_sum'],
+                                               config['Local_CrossAttention_layer']['q_in'],
+                                               config['Local_CrossAttention_layer']['q_out'],
+                                               config['Local_CrossAttention_layer']['k_in'],
+                                               config['Local_CrossAttention_layer']['k_out'],
+                                               config['Local_CrossAttention_layer']['v_in'],
+                                               config['Local_CrossAttention_layer']['v_out'],
+                                               config['Local_CrossAttention_layer']['num_heads'],
+                                               config['Local_CrossAttention_layer']['att_score_method'],
+                                               config['Local_CrossAttention_layer']['ff_conv1_channels_in'],
+                                               config['Local_CrossAttention_layer']['ff_conv1_channels_out'],
+                                               config['Local_CrossAttention_layer']['ff_conv2_channels_in'],
+                                               config['Local_CrossAttention_layer']['ff_conv2_channels_out'])
 
     # synchronize bn among gpus
     if config.train.ddp.syn_bn:  # TODO: test performance
@@ -198,7 +198,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
     sys.stdout = buffer = io.StringIO()
     sys.stdout = original_stdout
     output = buffer.getvalue()
-    filename = f'saved_model/model_info_{run.id}.txt'
+    filename = f'saved_model/model_info.txt'
     with open(filename, 'w') as f:
         f.write(output)
         f.write('\n')
