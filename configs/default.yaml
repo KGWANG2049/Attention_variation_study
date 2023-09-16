@@ -24,10 +24,10 @@ wandb:
   api_key: 7e17064baa2aaa0cccea0a2159ad51c758b7bf3a  # your wandb api key
   entity: ies_kaige  # the place to save your runs. can be your wandb username or team name
   project: ma_kaige # the name of your project
-  name: cls_lr1e-4to1e-8_cosLR_adamw_weightdecay1_baseF_diff_keyone_scale0_CAscalarDot_perAttlayerexp1024_totalBS16 # the name your run
+  name: cls_formal_local_scalar_add_neighbor_bs8*2_lr1e-4to1e-8_cosLR_adamw_weightdecay1_baseFea_ss_keyOne_scale0 # the name your run
 
 train:  # only valid when running the training script
-  epochs: 2
+  epochs: 200
   lr: 1e-4
   lr_scheduler:
     enable: true
@@ -44,7 +44,7 @@ train:  # only valid when running the training script
       warmup_epochs: 10  # number of epochs the warmup process takes
       warmup_init_lr: ${train.lr_scheduler.cos_warmupLR.eta_min}  # initial warmup lr
       T_max: 190  # number of epochs the cosine annealing process takes. should be epochs - warmup_epochs
-      eta_min: 1e-8  # minimum lr of cosine annealing process
+      eta_min: 1e-6  # minimum lr of cosine annealing process
   optimizer:
     which: adamw  # adamw or sgd
     weight_decay: 1
@@ -90,7 +90,7 @@ train:  # only valid when running the training script
     nproc_this_node: 1  # how many gpu you want to use in current PC, should match 'which_gpu'
     rank_starts_from: 0  # don't change this if you use only one PC
     world_size: 1  # this is equal to 'nproc_this_node' if you only use one PC
-  amp: true  # whether to use automatic mixed precision
+  amp: false  # whether to use automatic mixed precision
   grad_clip:
     enable: false
     mode: value  # clip by value or by norm
@@ -116,7 +116,7 @@ test:  # only valid when running the test script
   ddp:
     which_gpu: [0]
     master_addr: localhost  # don't change this if you use only one PC
-    master_port: 12345 # please choose an available port
+    master_port: 12345  # please choose an available port
     nnodes: 1  # how many PCs you want to use
     nproc_this_node: 1  # how many gpu you want to use in current PC, should match 'which_gpu'
     rank_starts_from: 0  # don't change this if you use only one PC
@@ -133,9 +133,7 @@ test:  # only valid when running the test script
     vis_which: [0, 4]  # which category to be visualized
     num_vis: 5  # how many point clouds to visualize for one category
 
-# the layer order inside the block is:
-# embedding -> neighbor2point -> downsample -> neighbor2point -> downsample -> neighbor2point
-#                             -> upsample -> neighbor2point -> upsample.-> neighbor2point
+
 Point_Embedding:
   embedding_k: [32, 32]
   point_emb1_in: [6, 128]
@@ -145,14 +143,14 @@ Point_Embedding:
 
 Local_CrossAttention_layer:
   enable: true
-  global_or_local: 'global'
+  global_or_local: 'local' # local or global
   single_scale_or_multi_scale: ['ss', 'ss', 'ss', 'ss']  # need input 'ss' or 'ms'
   key_one_or_sep: ['one', 'one', 'one', 'one']  # need input  'one' or 'sep', when single_scale_or_multi_scale = ss, only 'one' is Effective
   shared_ca: [false, false, false, false]  # it must be false when key_one_or_sep = one
-  K: [32, 32, 32, 32]
-  scale: [2, 2, 2, 2]  # represent different meanings. when single_scale_or_multi_scale is ss, 2 means single 2, when ms 2 means use scale 0 & 1 & 2
-  neighbor_selection_method: ['feature', 'feature', 'feature', 'feature']
-  neighbor_type: ['diff', 'diff', 'diff', 'diff']
+  K: [8, 8, 8, 8]
+  scale: [0, 0, 0, 0]  # represent different meanings. when single_scale_or_multi_scale is ss, 2 means single 2, when ms 2 means use scale 0 & 1 & 2
+  neighbor_selection_method: ['feature', 'feature', 'feature', 'feature']  # feature or coordinate
+  neighbor_type: ['diff', 'diff', 'diff', 'diff']  # diff or neighbor or center_diff or center_neighbor or neighbor_diff or center_neighbor_diff
   mlp_or_sum: ['sum', 'sum', 'sum', 'sum']  # its useful only when single_scale_or_multi_scale = ms, and key_one_or_sep = sep
   q_in: [128, 128, 128, 128]
   q_out: [128, 128, 128, 128]
@@ -161,8 +159,8 @@ Local_CrossAttention_layer:
   v_in: [128, 128, 128, 128]
   v_out: [128, 128, 128, 128]
   num_heads: [4, 4, 4, 4]
-  Att_Score_method: ['global_sub', 'global_sub', 'global_sub', 'global_sub']
-  ff_conv1_channels_in: [128, 128, 128, 128]
+  att_score_method: ['local_vector_add', 'local_vector_add', 'local_vector_add', 'local_vector_add']  # local_scalar_dot or local_scalar_sub or local_scalar_add or local_scalar_cat or local_vector_sub or local_vector_add
+  ff_conv1_channels_in: [128, 128, 128, 128]                                  # global_dot or global_sub
   ff_conv1_channels_out: [512, 512, 512, 512]  #input x 4
   ff_conv2_channels_in: [512, 512, 512, 512]
   ff_conv2_channels_out: [128, 128, 128, 128]

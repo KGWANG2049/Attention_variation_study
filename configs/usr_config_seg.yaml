@@ -1,40 +1,65 @@
 wandb:
   enable: true
-  api_key: ???  # your wandb api key
-  entity: ???  # the place to save your runs. can be your wandb username or team name
-  project: ???  # the name of your project
-  name: ???
+  api_key: 7e17064baa2aaa0cccea0a2159ad51c758b7bf3a  # your wandb api key
+  entity: ies_kaige  # the place to save your runs. can be your wandb username or team name
+  project: ma_kaige # the name of your project
+  name: cls_formal_local_scalar_add_neighbor_bs8*2_lr1e-4to1e-8_cosLR_adamw_weightdecay1_baseFea_ss_keyOne_scale0 # the name your run
 
-train:
+train:  # only valid when running the training script
   epochs: 200
-  dataloader:
-    selected_points: 2048  # points to be selected from every point cloud
-    fps: false  #  whether to use fps to select points. if false, use random downsample to select points
-    combine_trainval: true  # combine train and validation set as train set
-    batch_size_per_gpu: 2
-    num_workers: 2  # the number of subprocess to load data
-    prefetch: ${train.dataloader.batch_size_per_gpu}  # samples to be prefetched. e.g. 64 means 64*num_workers samples to be prefetched
-    pin_memory: true  # pin memory in RAM
   lr: 1e-4
   lr_scheduler:
-    which: cosLR
+    enable: true
+    which: cosLR  # expLR, stepLR, cosLR or cos_warmupLR
+    expLR:
+      gamma: 0.95
     stepLR:
-      gamma: 0.2
-      decay_step: 60
+      gamma: 0.2  # lr = gamma * lr, when decay step is hit
+      decay_step: 50
     cosLR:
-      T_max: ${train.epochs}
-      eta_min: 1e-8
+      T_max: ${train.epochs}  # maximum epochs
+      eta_min: 1e-8  # minimum lr
     cos_warmupLR:
       warmup_epochs: 10  # number of epochs the warmup process takes
       warmup_init_lr: ${train.lr_scheduler.cos_warmupLR.eta_min}  # initial warmup lr
       T_max: 190  # number of epochs the cosine annealing process takes. should be epochs - warmup_epochs
-      eta_min: 1e-8  # minimum lr of cosine annealing process
+      eta_min: 1e-6  # minimum lr of cosine annealing process
   optimizer:
     which: adamw  # adamw or sgd
-    weight_decay: 1e-4
-  validation_freq: 1
+    weight_decay: 1
+  consistency_loss_factor: 1  # only valid when training modelnet model
+  validation_freq: 1  # frequency in epoch(s) to validate the model
   label_smoothing: false
-  amp: false  # whether to use automatic mixed precision
+  epsilon: 0.2  # epsilon for label smoothing
+  dataloader:
+    selected_points: 2048  # points to be selected from every point cloud
+    fps: false  #  whether to use fps to select points. if false, use random downsample to select points
+    combine_trainval: true  # combine train and validation set as train set
+    batch_size_per_gpu: 8  # the actual batch size should be batch_size_per_gpu * num_gpu
+    num_workers: ${train.ddp.nproc_this_node}  # the number of subprocess to load data
+    prefetch: ${train.dataloader.batch_size_per_gpu}  # samples to be prefetched. e.g. 64 means 64*num_workers samples to be prefetched
+    pin_memory: true  # pin memory in RAM
+    data_augmentation:
+      enable: true
+      num_aug: 1  # how many augmentations applied in one point cloud at the same time
+      jitter:  # add Gaussian noise to point cloud xyz positions
+        enable: true
+        std: 0.01
+        clip: 0.05
+      rotate:
+        enable: true
+        which_axis: y
+        angle_range: [-15, 15]  # the unit is degree
+      translate:
+        enable: true
+        x_range: [-0.2, 0.2]
+        y_range: [-0.2, 0.2]
+        z_range: [-0.2, 0.2]
+      anisotropic_scale:
+        enable: true
+        x_range: [0.66, 1.5]
+        y_range: [0.66, 1.5]
+        z_range: [0.66, 1.5]
   ddp:
     which_gpu: [0]
     syn_bn: true  # synchronize batch normalization among gpus
@@ -43,14 +68,28 @@ train:
     nnodes: 1  # how many PCs you want to use
     nproc_this_node: 1  # how many gpu you want to use in current PC, should match 'which_gpu'
     rank_starts_from: 0  # don't change this if you use only one PC
-    world_size: 1 # this is equal to 'nproc_this_node' if you only use one PC
+    world_size: 1  # this is equal to 'nproc_this_node' if you only use one PC
+  amp: false  # whether to use automatic mixed precision
+  grad_clip:
+    enable: false
+    mode: value  # clip by value or by norm
+    max_norm: 1e-2
+    value: 1e-2
+  debug:
+    enable: false
+    check_layer_input_range: true
+    check_layer_output_range: true
+    check_layer_parameter_range: true
+    check_gradient_input_range: true  # gradient w.r.t layer input
+    check_gradient_output_range: true  # gradient w.r.t layer output
+    check_gradient_parameter_range: true  # gradient w.r.t layer parameters
 
 test:  # only valid when running the test script
   label_smoothing: false
   epsilon: 0.2  # epsilon for label smoothing
   dataloader:
     batch_size_per_gpu: 4
-    num_workers: 2  # ${test.ddp.nproc_this_node}  # the number of subprocess to load data
+    num_workers: ${test.ddp.nproc_this_node}  # the number of subprocess to load data
     prefetch: ${test.dataloader.batch_size_per_gpu}  # samples to be prefetched. e.g. 64 means 64*num_workers samples to be prefetched
     pin_memory: true  # pin memory in RAM
   ddp:
@@ -61,137 +100,46 @@ test:  # only valid when running the test script
     nproc_this_node: 1  # how many gpu you want to use in current PC, should match 'which_gpu'
     rank_starts_from: 0  # don't change this if you use only one PC
     world_size: 1  # this is equal to 'nproc_this_node' if you only use one PC
-  visualize_preds:
+  print_results: true
+  visualize_preds:  # only be used in apes
     enable: false
     format: png  # png or ply
     vis_which: [0, 4]  # which category to be visualized
     num_vis: 5  # how many point clouds to visualize for one category
-  visualize_downsampled_points:
-    enable: true
-    format: png  # png or ply
-    vis_which: [0, 4, 7, 8, 15, 17, 19, 26]  # which category to be visualized
-    num_vis: 1  # how many point clouds to visualize for one category
-  visualize_attention_heatmap:
+  visualize_attention_heatmap:  # only be used in apes
     enable: false
     format: png  # png or ply
     vis_which: [0, 4]  # which category to be visualized
     num_vis: 5  # how many point clouds to visualize for one category
 
-# the layer order inside the block is:
-# embedding -> neighbor2point -> downsample -> neighbor2point -> downsample -> neighbor2point
-#                             -> upsample -> neighbor2point -> upsample.-> neighbor2point
-neighbor2point_block:
+
+Point_Embedding:
+  embedding_k: [32, 32]
+  point_emb1_in: [6, 128]
+  point_emb1_out: [64, 64]
+  point_emb2_in: [64, 64]
+  point_emb2_out: [64, 64]
+
+Local_CrossAttention_layer:
   enable: true
-  edgeconv_embedding:
-    K: [32, 32]
-    group_type: [center_diff, center_diff]  # neighbor, diff, center_neighbor or center_diff
-    conv1_in: [6, 128]
-    conv1_out: [64, 64]
-    conv2_in: [64, 64]
-    conv2_out: [64, 64]
-  downsample:
-    which_ds: local   # global or local
-    K: [1024, 512]
-    q_in: [128, 128]
-    q_out: [128, 128]
-    k_in: [128, 128]
-    k_out: [128, 128]
-    v_in: [128, 128]
-    v_out: [128, 128]
-    num_heads: [1, 1]
-  upsample:
-    which_ups: crossA  # crossA or selfA
-    q_in: [128, 128]
-    q_out: [128, 128]
-    k_in: [128, 128]
-    k_out: [128, 128]
-    v_in: [128, 128]
-    v_out: [128, 128]
-    num_heads: [4, 4]
-  neighbor2point:
-    K: [32, 32, 32, 32, 32]  # 3 values in the list means neighbor2point_block includes 3 neighbor2point layers. The 'K' for each layer is 40, 40 and 40 respectively
-    group_type: [diff, diff, diff, diff, diff]  # diff, neighbor, center_neighbor or center_diff
-    q_in: [128, 128, 128, 128, 128]
-    q_out: [128, 128, 128, 128, 128]
-    k_in: [128, 128, 128, 128, 128]
-    k_out: [128, 128, 128, 128, 128]
-    v_in: [128, 128, 128, 128, 128]
-    v_out: [128, 128, 128, 128, 128]
-    num_heads: [4, 4, 4, 4, 4]
-    ff_conv1_channels_in: [128, 128, 128, 128, 128]
-    ff_conv1_channels_out: [512, 512, 512, 512, 512]
-    ff_conv2_channels_in: [512, 512, 512, 512, 512]
-    ff_conv2_channels_out: [128, 128, 128, 128, 128]
-
-# the layer order inside the block is:
-# embedding -> edgeconv -> downsample -> edgeconv -> downsample -> edgeconv
-#                       -> upsample -> edgeconv -> upsample -> edgeconv
-edgeconv_block:
-  enable: false
-  edgeconv_embedding:
-    K: [32, 32]
-    group_type: [center_diff, center_diff]  # neighbor, diff, center_neighbor or center_diff
-    conv1_in: [6, 128]
-    conv1_out: [64, 64]
-    conv2_in: [64, 64]
-    conv2_out: [64, 64]
-  downsample:
-    which_ds: p2p   # p2p or n2p
-    K: [1024, 512]
-    q_in: [128, 128]
-    q_out: [128, 128]
-    k_in: [128, 128]
-    k_out: [128, 128]
-    v_in: [128, 128]
-    v_out: [128, 128]
-    num_heads: [1, 1]
-  edgeconv:
-    K: [32, 32, 32]
-    group_type: [center_diff, center_diff, center_diff]  # neighbor, diff, center_neighbor or center_diff
-    conv1_in: [256, 256, 256]
-    conv1_out: [128, 128, 128]
-    conv2_in: [128, 128, 128]
-    conv2_out: [128, 128, 128]
-
-# the layer order inside the block is:
-# embedding -> point2point -> downsample -> point2point -> downsample -> point2point
-#                          -> upsample -> point2point -> upsample -> point2point
-point2point_block:
-  enable: false
-  edgeconv_embedding:
-    K: [32, 32]
-    group_type: [center_diff, center_diff]  # neighbor, diff, center_neighbor or center_diff
-    conv1_in: [6, 128]
-    conv1_out: [64, 64]
-    conv2_in: [64, 64]
-    conv2_out: [64, 64]
-  downsample:
-    which_ds: p2p   # p2p or n2p
-    K: [1024, 512]
-    q_in: [128, 128]
-    q_out: [128, 128]
-    k_in: [128, 128]
-    k_out: [128, 128]
-    v_in: [128, 128]
-    v_out: [128, 128]
-    num_heads: [1, 1]
-  upsample:
-    q_in: [64, 64]
-    q_out: [64, 64]
-    k_in: [64, 64]
-    k_out: [64, 64]
-    v_in: [64, 64]
-    v_out: [64, 64]
-    num_heads: [4, 4]
-  point2point:
-    q_in: [128, 128, 128]
-    q_out: [128, 128, 128]
-    k_in: [128, 128, 128]
-    k_out: [128, 128, 128]
-    v_in: [128, 128, 128]
-    v_out: [128, 128, 128]
-    num_heads: [4, 4, 4]
-    ff_conv1_channels_in: [128, 128, 128]
-    ff_conv1_channels_out: [512, 512, 512]
-    ff_conv2_channels_in: [512, 512, 512]
-    ff_conv2_channels_out: [128, 128, 128]
+  global_or_local: 'local' # local or global
+  single_scale_or_multi_scale: ['ss', 'ss', 'ss', 'ss']  # need input 'ss' or 'ms'
+  key_one_or_sep: ['one', 'one', 'one', 'one']  # need input  'one' or 'sep', when single_scale_or_multi_scale = ss, only 'one' is Effective
+  shared_ca: [false, false, false, false]  # it must be false when key_one_or_sep = one
+  K: [4, 4, 4, 4]
+  scale: [0, 0, 0, 0]  # represent different meanings. when single_scale_or_multi_scale is ss, 2 means single 2, when ms 2 means use scale 0 & 1 & 2
+  neighbor_selection_method: ['feature', 'feature', 'feature', 'feature']  # feature or coordinate
+  neighbor_type: ['diff', 'diff', 'diff', 'diff']  # diff or neighbor or center_diff or center_neighbor or neighbor_diff or center_neighbor_diff
+  mlp_or_sum: ['sum', 'sum', 'sum', 'sum']  # its useful only when single_scale_or_multi_scale = ms, and key_one_or_sep = sep
+  q_in: [128, 128, 128, 128]
+  q_out: [128, 128, 128, 128]
+  k_in: [128, 128, 128, 128]
+  k_out: [128, 128, 128, 128]
+  v_in: [128, 128, 128, 128]
+  v_out: [128, 128, 128, 128]
+  num_heads: [4, 4, 4, 4]
+  att_score_method: ['local_scalar_dot', 'local_scalar_dot', 'local_scalar_dot', 'local_scalar_dot']  # local_scalar_dot or local_scalar_sub or local_scalar_add or local_scalar_cat or local_vector_sub or local_vector_add
+  ff_conv1_channels_in: [128, 128, 128, 128]                                  # global_dot or global_sub
+  ff_conv1_channels_out: [512, 512, 512, 512]  #input x 4
+  ff_conv2_channels_in: [512, 512, 512, 512]
+  ff_conv2_channels_out: [128, 128, 128, 128]
