@@ -242,7 +242,6 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
     val_miou_list = [0]
     val_category_miou_list = [0]
 
-
     # start training
     for epoch in range(config.train.epochs):
         my_model.train()
@@ -393,7 +392,6 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                         val_loss /= config.train.ddp.nproc_this_node
                         val_loss_list.append(val_loss.detach().cpu().numpy())
 
-
             # calculate metrics
             if rank == 0:
                 preds = np.concatenate(pred_list, axis=0)
@@ -404,8 +402,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                 val_miou = sum(shape_ious) / len(shape_ious)
                 val_category_miou = sum(category_iou) / len(category_iou)
                 val_loss = sum(val_loss_list) / len(val_loss_list)
-                val_ds_miou = []
-                val_ds_category_miou = []
+
 
 
             # log results
@@ -424,6 +421,7 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
                     metric_dict['shapenet_val']['best_mIoU'] = max(val_miou_list)
                     metric_dict['shapenet_val']['best_category_mIoU'] = max(val_category_miou_list)
 
+                    wandb.log(metric_dict, commit=True)
         else:
             if rank == 0:
                 kbar.update(i+1, values=[('lr', current_lr), ('train_loss', train_loss), ('train_mIoU', train_miou)])
@@ -445,7 +443,6 @@ def train(local_rank, config):  # the first arg must be local rank for the sake 
         artifacts.add_file(f'/tmp/{run.id}_checkpoint.pt', name='checkpoint.pt')
         run.log_artifact(artifacts)
         wandb.finish(quiet=True)
-
 
 if __name__ == '__main__':
     main()
