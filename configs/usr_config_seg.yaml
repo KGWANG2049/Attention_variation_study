@@ -3,7 +3,7 @@ wandb:
   api_key: 7e17064baa2aaa0cccea0a2159ad51c758b7bf3a  # your wandb api key
   entity: ies_kaige  # the place to save your runs. can be your wandb username or team name
   project: ma_kaige # the name of your project
-  name: cls_formal_local_scalar_add_neighbor_bs8*2_lr1e-4to1e-8_cosLR_adamw_weightdecay1_baseFea_ss_keyOne_scale0 # the name your run
+  name: cls_formal_local_scalar_add_neighbor_bs8x2_lr1e-4to1e-8_cosLR_adamw_weightdecay1_baseFea_ss_keyOne_scale0 # the name your run
 
 train:  # only valid when running the training script
   epochs: 200
