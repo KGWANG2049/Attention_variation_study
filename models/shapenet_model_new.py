@@ -36,7 +36,7 @@ class Global_CrossAttention(nn.Module):
         # self.linear_energy = nn.Linear(3, num_points)
         # self.linear_qkv = nn.Linear(3, self.v_depth)
 
-    def forward(self, coordinate, x, neighbors, Att_Score_method, pos_method):
+    def forward(self, coordinate, x, neighbors, att_score_method, pos_method):
         # x.shape == (B, C, N)
         q = self.q_conv(x)
         # q.shape == (B, C, N)
@@ -51,7 +51,7 @@ class Global_CrossAttention(nn.Module):
         v = self.global_split_heads(v, self.num_heads, self.v_depth)
         # v.shape == (B, H, N, D)
 
-        if Att_Score_method == 'dot_product':
+        if att_score_method == 'dot_product':
             k = k.permute(0, 1, 3, 2)
             # k.shape == (B, H, D, N)
             if pos_method == 'method_i':
@@ -88,7 +88,7 @@ class Global_CrossAttention(nn.Module):
             else:
                 raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
 
-        elif Att_Score_method == 'subtraction':
+        elif att_score_method == 'subtraction':
             if pos_method == 'method_i':
                 energy = (q - k) @ ((q - k).permute(1, 0))
                 # energy.shape == (B, H, N, N)
@@ -123,7 +123,7 @@ class Global_CrossAttention(nn.Module):
             else:
                 raise ValueError(f"pos_method must be 'method_i', 'method_ii' or 'method_iii'. Got: {pos_method}")
 
-        elif Att_Score_method == 'addition':
+        elif att_score_method == 'addition':
             if pos_method == 'method_i':
                 q = q.unsqueeze(-2).repeat(1, 1, 1, q.shape[2], 1)
                 # q.shape == (B, H, N, N, D)
@@ -248,7 +248,7 @@ class Global_CrossAttention(nn.Module):
 
 class CrossAttention(nn.Module):
     def __init__(self, q_in=64, q_out=64, k_in=64, k_out=64, v_in=64, v_out=64, num_points=1024, num_heads=8
-                 , neighbor_type='diff', len_feature=256, Att_Score_method='dot_product'):
+                 , neighbor_type='diff', len_feature=256, att_score_method='dot_product'):
         super(CrossAttention, self).__init__()
         # check input values
         if k_in != v_in:
@@ -260,7 +260,7 @@ class CrossAttention(nn.Module):
         if q_out != v_out:
             raise ValueError('Please check the dimension of energy')
         print('q_out, k_out, v_out are same')
-        self.Att_Score_method = Att_Score_method
+        self.att_score_method = att_score_method
         self.neighbor_type = neighbor_type
         self.len_feature = len_feature
         self.num_points = num_points
@@ -307,7 +307,7 @@ class CrossAttention(nn.Module):
         k = k.permute(0, 1, 2, 4, 3)
         # k.shape == (B, H, N, D, K)
 
-        if self.Att_Score_method == 'dot_product':
+        if self.att_score_method == 'dot_product':
             energy = q @ k
             # energy.shape == (B, H, N, 1, K)
             scale_factor = math.sqrt(q.shape[-1])
@@ -315,7 +315,7 @@ class CrossAttention(nn.Module):
             # attention.shape == (B, H, N, 1, K)
             x = (attention @ v)[:, :, :, 0, :].permute(0, 2, 1, 3)
             # x.shape == (B, N, H, D)
-        elif self.Att_Score_method == 'subtraction':
+        elif self.att_score_method == 'subtraction':
             q_repeated = q.repeat(1, 1, 1, k.shape[-2], 1)
             # q_repeated.shape == (B, H, N, K, D) to match with k
             energy = q_repeated - k
@@ -327,7 +327,7 @@ class CrossAttention(nn.Module):
             # x.shape == (B, N, H, K, D)
             x = x.sum(dim=-2)
             # x.shape == (B, N, H, D)
-        elif self.Att_Score_method == 'addition':
+        elif self.att_score_method == 'addition':
             q_repeated = q.repeat(1, 1, 1, None, 1)
             # q_repeated.shape == (B, H, N, 1, D)
             energy = q_repeated + k
@@ -342,7 +342,7 @@ class CrossAttention(nn.Module):
             # attention.shape == (B, H, N, 1, K)
             x = (attention @ v)[:, :, :, 0, :].permute(0, 2, 1, 3)
             # x.shape == (B, N, H, D)
-        elif self.Att_Score_method == 'concat':
+        elif self.att_score_method == 'concat':
             q_repeated = q.repeat(1, 1, 1, k.shape[-2], 1)
             # q_repeated.shape == (B, H, N, K, D) to match with k
             energy = torch.cat((q_repeated, k), dim=-1)
@@ -357,7 +357,7 @@ class CrossAttention(nn.Module):
             x = (attention @ v)[:, :, :, 0, :].permute(0, 2, 1, 3)
             # x.shape == (B, N, H, D)
         else:
-            raise ValueError(f'Invalid value for Att_Score_method: {self.Att_Score_method}')
+            raise ValueError(f'Invalid value for att_score_method: {self.att_score_method}')
 
         x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
         # x.shape == (B, C, N)

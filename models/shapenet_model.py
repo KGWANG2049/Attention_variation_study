@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 from utils import ops
-import math
 from models.attention_variants import Local_based_attention_variation, Global_based_attention_variation
 
 
@@ -333,6 +332,34 @@ class Point_Embedding(nn.Module):
         return x
 
 
+class STN_layer(nn.Module):
+    def __init__(self, K, scale, neighbor_selection_method, neighbor_type, key_one_or_sep):
+        super(STN_layer, self).__init__()
+        self.K = K[0]
+        self.scale = scale[0]
+        self.neighbor_selection_method = neighbor_selection_method[0]
+        self.neighbor_type = neighbor_type[0]
+        self.key_one_or_sep = key_one_or_sep[0]
+        self.STN = ops.STN()
+
+    def forward(self, x):
+        if self.key_one_or_sep == 'one':
+            x0, _ = ops.select_neighbors_in_one_key(x, x, self.K, self.scale, self.neighbor_selection_method,
+                                                 self.neighbor_type)
+        elif self.key_one_or_sep == 'sep':
+            x0, _ = ops.select_neighbors_in_separate_key(x, x, self.K, self.scale, self.neighbor_selection_method,
+                                                      self.neighbor_type)
+        else:
+            raise ValueError(f"Invalid value for key_one_or_sep: {self.key_one_or_sep}")
+        x0 = x0.permute(0, 3, 1, 2)  # neighbor.shape == (B, num x C, N, (scale+1) x K)
+        t = self.STN(x0)  # t.shape == (B, 3, 3)
+        x = x.transpose(2, 1)  # (B, N, 3)
+        x = torch.bmm(x, t)  # (B, N, 3) * (B, 3, 3) -> (B, N, 3)
+        x = x.transpose(2, 1)  # (B, N, 3) -> (B, 3, N)
+        #  print('rotation x, 8, 3, 2048:', x.shape)
+        return x
+
+
 class ShapeNetModelSeg(nn.Module):
     def __init__(self, embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out,
                  global_or_local, single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
@@ -344,6 +371,7 @@ class ShapeNetModelSeg(nn.Module):
         super(ShapeNetModelSeg, self).__init__()
         self.k_out = k_out[0]
         self.num_att_layer = len(k_out)
+
         self.Point_Embedding_list = nn.ModuleList(
             [Point_Embedding(embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out) for
              embedding_k, point_emb1_in, point_emb1_out, point_emb2_in, point_emb2_out in
@@ -368,6 +396,8 @@ class ShapeNetModelSeg(nn.Module):
                      ff_conv1_channels_out, ff_conv2_channels_in,
                      ff_conv2_channels_out)])
         elif self.global_or_local == 'local':
+            self.STN_layer = STN_layer(K, scale, neighbor_selection_method, neighbor_type, key_one_or_sep)
+
             self.Local_CrossAttention_Layer_list = nn.ModuleList(
                 [Local_CrossAttention_Layer(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
                                             neighbor_selection_method,
@@ -389,9 +419,9 @@ class ShapeNetModelSeg(nn.Module):
         self.linear0 = nn.Sequential(nn.Conv1d(self.k_out * self.num_att_layer, 1024, kernel_size=1, bias=False),
                                      nn.BatchNorm1d(1024),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear1 = nn.Sequential(nn.Conv1d(2624, 1024, kernel_size=1, bias=False), nn.BatchNorm1d(1024),
+        self.linear1 = nn.Sequential(nn.Conv1d(1600, 512, kernel_size=1, bias=False), nn.BatchNorm1d(512),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear2 = nn.Sequential(nn.Conv1d(1024, 256, kernel_size=1, bias=False), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
+        self.linear2 = nn.Sequential(nn.Conv1d(512, 256, kernel_size=1, bias=False), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
 
         self.conv1 = nn.Sequential(nn.Conv1d(16, 64, kernel_size=1, bias=False),
                                    nn.BatchNorm1d(64),
@@ -405,13 +435,14 @@ class ShapeNetModelSeg(nn.Module):
         # [nn.Conv1d(channel_in, 1024, kernel_size=1, bias=False) for channel_in in ff_conv2_channels_out])
 
     def forward(self, x, category_id):
-        device = x.device
-        N = x.shape[2]
-        xyz = x
-        # print("my input :", x.shape)
         """
         :original pc xyz: xyz.shape == (B, 3, N)
         """
+        if self.global_or_local == 'local':
+            x = self.STN_layer(x)
+        N = x.shape[2]
+        xyz = x
+        # print("my input :", x.shape)
         x_list = []
         res_link_list = []
         for point_embedding in self.Point_Embedding_list:
@@ -435,24 +466,20 @@ class ShapeNetModelSeg(nn.Module):
                 # i += 1
         x_cat = torch.cat(res_link_list, dim=1)  # (B, 512, N)
         x = self.linear0(x_cat)  # x.shape == (B, 1024, N)
-        x_max = x.max(dim=-1)[0]  # x.shape == (B, 1024)
-        x_max = x_max.unsqueeze(2)  # x.shape == (B, 1024, 1)
-        x_average = x.mean(dim=-1, keepdim=True)
-        # x_average.shape == (B, 1024, 1)
-        x = torch.cat([x_max, x_average], dim=1)
-        # x.shape == (B, 2048, 1)
+        x = x.max(dim=-1)[0]  # x.shape == (B, 1024)
+        x = x.unsqueeze(2)  # x.shape == (B, 1024, 1)
         category_id = self.conv1(category_id)
         # category_id.shape == (B, 64, 1)
         x = torch.cat([x, category_id], dim=1)
-        # x.shape === (B, 2048+64, 1)
+        # x.shape === (B, 1024+64, 1)
         x = x.repeat(1, 1, N)
         # x.shape == (B, 1024+64, N)
         x = torch.cat([x, x_cat], dim=1)
-        # x.shape == (B, 2048+64+512, N)
+        # x.shape == (B, 1024+64+512, N)
         x = self.linear1(x)
-        # x.shape == (B, 1024, N)
+        # x.shape == (B, 512, N)
         x = self.dp1(x)
-        # x.shape == (B, 1024, N)
+        # x.shape == (B, 512, N)
         x = self.linear2(x)
         # x.shape == (B, 256, N)
         x = self.dp2(x)

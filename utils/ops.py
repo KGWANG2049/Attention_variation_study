@@ -1,5 +1,6 @@
 import torch
-
+from torch import nn
+import torch.nn.init as init
 
 def index_points(points, idx):
     """
@@ -293,6 +294,49 @@ def list_generator(neighbors, K, scale):
     return sliced_tensors
 
 
+class STN(nn.Module):
+    def __init__(self):
+        super(STN, self).__init__()
+
+        self.conv1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=1, bias=False),
+                                   nn.BatchNorm2d(64),
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.conv2 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=1, bias=False),
+                                   nn.BatchNorm2d(128),
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.conv3 = nn.Sequential(nn.Conv1d(128, 1024, kernel_size=1, bias=False),
+                                   nn.BatchNorm1d(1024),
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.linear1 = nn.Sequential(nn.Linear(1024, 512, bias=False),
+                                     nn.BatchNorm1d(512),
+                                     nn.LeakyReLU(negative_slope=0.2))
+        self.linear2 = nn.Sequential(nn.Linear(512, 256, bias=False),
+                                     nn.BatchNorm1d(256),
+                                     nn.LeakyReLU(negative_slope=0.2))
+        self.transform = nn.Linear(256, 3 * 3)
+        init.constant_(self.transform.weight, 0)
+        init.eye_(self.transform.bias.view(3, 3))
+        self.dp1 = nn.Dropout(p=0.5)
+        self.dp2 = nn.Dropout(p=0.5)
+
+    def forward(self, x):
+        batch_size = x.size(0)
+
+        x = self.conv1(x)  # (batch_size, 3*2, num_points, k) -> (batch_size, 64, num_points, k)
+        x = self.conv2(x)  # (batch_size, 64, num_points, k) -> (batch_size, 128, num_points, k)
+        x = x.max(dim=-1, keepdim=False)[0]  # (batch_size, 128, num_points, k) -> (batch_size, 128, num_points)
+
+        x = self.conv3(x)  # (batch_size, 128, num_points) -> (batch_size, 1024, num_points)
+        x = x.max(dim=-1, keepdim=False)[0]  # (batch_size, 1024, num_points) -> (batch_size, 1024)
+
+        x = self.linear1(x)  # (batch_size, 1024) -> (batch_size, 512)
+        x = self.dp1(x)
+        x = self.linear2(x)  # (batch_size, 512) -> (batch_size, 256)
+        x = self.dp2(x)
+        x = self.transform(x)  # (batch_size, 256) -> (batch_size, 3*3)
+        x = x.view(batch_size, 3, 3)  # (batch_size, 3*3) -> (batch_size, 3, 3)
+
+        return x
 """
 def operation_mode(operation_mode, query, keys):
     if operation_mode == 'multiple':
