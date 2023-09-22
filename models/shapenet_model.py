@@ -419,9 +419,9 @@ class ShapeNetModelSeg(nn.Module):
         self.linear0 = nn.Sequential(nn.Conv1d(self.k_out * self.num_att_layer, 1024, kernel_size=1, bias=False),
                                      nn.BatchNorm1d(1024),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear1 = nn.Sequential(nn.Conv1d(1600, 512, kernel_size=1, bias=False), nn.BatchNorm1d(512),
+        self.linear1 = nn.Sequential(nn.Conv1d(2624, 1024, kernel_size=1, bias=False), nn.BatchNorm1d(1024),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear2 = nn.Sequential(nn.Conv1d(512, 256, kernel_size=1, bias=False), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
+        self.linear2 = nn.Sequential(nn.Conv1d(1024, 256, kernel_size=1, bias=False), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
 
         self.conv1 = nn.Sequential(nn.Conv1d(16, 64, kernel_size=1, bias=False),
                                    nn.BatchNorm1d(64),
@@ -466,16 +466,20 @@ class ShapeNetModelSeg(nn.Module):
                 # i += 1
         x_cat = torch.cat(res_link_list, dim=1)  # (B, 512, N)
         x = self.linear0(x_cat)  # x.shape == (B, 1024, N)
-        x = x.max(dim=-1)[0]  # x.shape == (B, 1024)
-        x = x.unsqueeze(2)  # x.shape == (B, 1024, 1)
+        x_max = x.max(dim=-1, keepdim=True)[0]
+        # x_max.shape == (B, 1024, 1)
+        x_average = x.mean(dim=-1, keepdim=True)
+        # x_average.shape == (B, 1024, 1)
+        x = torch.cat([x_max, x_average], dim=1)
+        # x.shape == (B, 2048, 1)
         category_id = self.conv1(category_id)
         # category_id.shape == (B, 64, 1)
         x = torch.cat([x, category_id], dim=1)
-        # x.shape === (B, 1024+64, 1)
+        # x.shape === (B, 2048+64, 1)
         x = x.repeat(1, 1, N)
-        # x.shape == (B, 1024+64, N)
+        # x.shape == (B, 2048+64, N)
         x = torch.cat([x, x_cat], dim=1)
-        # x.shape == (B, 1024+64+512, N)
+        # x.shape == (B, 2048+64+512, N)
         x = self.linear1(x)
         # x.shape == (B, 512, N)
         x = self.dp1(x)
