@@ -396,7 +396,7 @@ class ShapeNetModelSeg(nn.Module):
                      ff_conv1_channels_out, ff_conv2_channels_in,
                      ff_conv2_channels_out)])
         elif self.global_or_local == 'local':
-            self.STN_layer = STN_layer(K, scale, neighbor_selection_method, neighbor_type, key_one_or_sep)
+            # self.STN_layer = STN_layer(K, scale, neighbor_selection_method, neighbor_type, key_one_or_sep)
 
             self.Local_CrossAttention_Layer_list = nn.ModuleList(
                 [Local_CrossAttention_Layer(single_scale_or_multi_scale, key_one_or_sep, shared_ca, K, scale,
@@ -438,8 +438,10 @@ class ShapeNetModelSeg(nn.Module):
         """
         :original pc xyz: xyz.shape == (B, 3, N)
         """
+        """
         if self.global_or_local == 'local':
             x = self.STN_layer(x)
+        """
         N = x.shape[2]
         xyz = x
         # print("my input :", x.shape)
