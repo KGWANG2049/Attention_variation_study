@@ -470,13 +470,15 @@ class ShapeNetModelSeg(nn.Module):
         x = self.linear0(x_cat)  # x.shape == (B, 1024, N)
         x_max = x.max(dim=-1, keepdim=True)[0]
         # x_max.shape == (B, 1024, 1)
+        '''
         x_average = x.mean(dim=-1, keepdim=True)
         # x_average.shape == (B, 1024, 1)
         x = torch.cat([x_max, x_average], dim=1)
         # x.shape == (B, 2048, 1)
+        '''
         category_id = self.conv1(category_id)
         # category_id.shape == (B, 64, 1)
-        x = torch.cat([x, category_id], dim=1)
+        x = torch.cat([x_max, category_id], dim=1)
         # x.shape === (B, 2048+64, 1)
         x = x.repeat(1, 1, N)
         # x.shape == (B, 2048+64, N)
