@@ -419,9 +419,9 @@ class ShapeNetModelSeg(nn.Module):
         self.linear0 = nn.Sequential(nn.Conv1d(self.k_out * self.num_att_layer, 1024, kernel_size=1, bias=False),
                                      nn.BatchNorm1d(1024),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear1 = nn.Sequential(nn.Conv1d(2624, 1024, kernel_size=1, bias=False), nn.BatchNorm1d(1024),
+        self.linear1 = nn.Sequential(nn.Conv1d(1600, 512, kernel_size=1, bias=False), nn.BatchNorm1d(512),
                                      nn.LeakyReLU(negative_slope=0.2))
-        self.linear2 = nn.Sequential(nn.Conv1d(1024, 256, kernel_size=1, bias=False), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
+        self.linear2 = nn.Sequential(nn.Conv1d(512, 256, kernel_size=1, bias=False), nn.BatchNorm1d(256), nn.LeakyReLU(negative_slope=0.2))
 
         self.conv1 = nn.Sequential(nn.Conv1d(16, 64, kernel_size=1, bias=False),
                                    nn.BatchNorm1d(64),
