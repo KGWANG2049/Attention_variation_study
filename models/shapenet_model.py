@@ -454,7 +454,7 @@ class ShapeNetModelSeg(nn.Module):
 
         if self.global_or_local == 'global':
             for Global_SelfAttention_Layer in self.Global_SelfAttention_Layer_list:
-                x = Global_SelfAttention_Layer(x)
+                x = Global_SelfAttention_Layer(x, xyz)
                 res_link_list.append(x)
         elif self.global_or_local == 'local':
             # i = 0
