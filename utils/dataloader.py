@@ -365,6 +365,12 @@ def download_modelnet_Alignment1024(url, saved_path):
         os.system('mv %s %s' % ('modelnet40_train_1024pts_fps.dat', dataset_path))
         os.system('mv %s %s' % ('modelnet40_test_1024pts_fps.dat', dataset_path))
 
+def pc_normalize(pc):
+    centroid = np.mean(pc, axis=0)
+    pc = pc - centroid
+    m = np.max(np.sqrt(np.sum(pc**2, axis=1)))
+    pc = pc / m
+    return pc
 
 class ModelNet_Alignment1024(torch.utils.data.Dataset):
     def __init__(self, saved_path, partition, selected_points, fps_enable, augmentation, num_aug, jitter, std, clip, rotate, which_axis,
@@ -397,7 +403,11 @@ class ModelNet_Alignment1024(torch.utils.data.Dataset):
             raise ValueError('modelnet40 has only train_set and test_set, which means validation_set is included in train_set!')
         with open(data_path, 'rb') as f:
             self.all_pcd, self.all_cls_label = pickle.load(f)
-        self.all_pcd = np.stack(self.all_pcd, axis=0)[:, :, :3]
+        self.all_pcd = np.array(self.all_pcd)
+        pc_to_normalize = np.copy(self.all_pcd[:, :3])
+        pc_to_normalize = pc_normalize(pc_to_normalize)
+        self.all_pcd[:, :3] = pc_to_normalize
+        self.all_pcd = np.stack(self.all_pcd, axis=0)[:, :, :6]
         self.all_cls_label = np.stack(self.all_cls_label, axis=0)[:, 0]
 
     def __len__(self):
