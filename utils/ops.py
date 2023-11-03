@@ -153,7 +153,6 @@ def select_neighbors_single_scale(pcd, coordinate, K, scale, neighbor_selection_
     end_idx = K * 2 ** scale
     step = 2 ** scale
     neighbors = index_points(pcd, idx)[:, :, start_idx:end_idx:step, :]  # neighbor.shape == (B, N, K, C)
-    # print("neighbor.shape", neighbor.shape)
     idx_all = idx[:, :, start_idx:end_idx:step]
 
     if neighbor_type == 'neighbor':
@@ -199,14 +198,12 @@ def select_neighbors_in_one_key(pcd, coordinate, K, scale, neighbor_selection_me
         start_idx = K * (2 ** i - 1)
         end_idx = K * (2 ** (i + 1) - 1)
         step = 2 ** i
-        neighbor = index_points(pcd, idx)[:, :, start_idx:end_idx:step, :]
-        # print("neighbor.shape", neighbor.shape)
-        # neighbor.shape == (B, N, K, C)
+        neighbor = index_points(pcd, idx)[:, :, start_idx:end_idx:step, :]  # neighbor.shape == (B, N, K, C)
         part_idx = idx[:, :, start_idx:end_idx:step]
         neighbors.append(neighbor)
+
         idx_all.append(part_idx)
     neighbors = torch.cat(neighbors, dim=2)  # neighbors.shape == (B, N, K, C)
-    # print("neighbors shape:", neighbors.shape)
     idx_all = torch.cat(idx_all, dim=2)
 
     if neighbor_type == 'neighbor':
@@ -218,18 +215,20 @@ def select_neighbors_in_one_key(pcd, coordinate, K, scale, neighbor_selection_me
         output = torch.cat([pcd[:, :, None, :], neighbors], dim=3)  # output.shape == (B, N, K, 2C)
     elif neighbor_type == 'center_diff':
         diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
-        output = torch.cat([pcd[:, :, None, :], diff], dim=3)  # output.shape == (B, N, K, 2C)
+
+        output = torch.cat([pcd.unsqueeze(2).expand(-1, -1, K*(scale+1), -1), diff], dim=3)  # output.shape == (B, N, K, 2C)
     elif neighbor_type == 'neighbor_diff':
         diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
-        output = torch.cat([neighbors, neighbors - diff])  # output.shape == (B, N, K, 2C)
+        output = torch.cat([neighbors, neighbors - diff], dim=3)  # output.shape == (B, N, K, 2C)
     elif neighbor_type == 'center_neighbor_diff':
         diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
-        output = torch.cat([pcd[:, :, None, :], neighbors, diff], dim=3)  # output.shape == (B, N, K, 3C)
+        output = torch.cat([pcd.unsqueeze(2).expand(-1, -1, K*(scale+1), -1), neighbors, diff],
+                           dim=3)  # output.shape == (B, N, K, 3C)
     else:
         raise ValueError(f'group_type should be "neighbor", "diff", "center_neighbor", "center_diff", '
                          f'"neighbor_diff", "center_neighbor_diff" but got {neighbor_type}')
 
-    return output, idx_all
+    return output, idx_all # output.shape == (B, N, K, C) idx_all.shape == (B, N, K)
 
 
 def select_neighbors_in_separate_key(pcd, coordinate, K, scale, neighbor_selection_method, neighbor_type):
@@ -251,14 +250,10 @@ def select_neighbors_in_separate_key(pcd, coordinate, K, scale, neighbor_selecti
         end_idx = K * (2 ** scale)
         step = 2 ** scale
         neighbors = index_points(pcd, idx)[:, :, start_idx:end_idx:step, :]  # neighbor.shape == (B, N, K, C)
-        # print("neighbor.shape", neighbor.shape)
-
         part_idx = idx[:, :, start_idx:end_idx:step]
         neighbor_list.append(neighbors)
         idx_all.append(part_idx)
-        # print("neighbors shape:", neighbors.shape)
     neighbors = torch.cat(neighbor_list, dim=2)  # neighbors.shape == (B, N, K, C)
-    # print("neighbors shape:", neighbors.shape)
     idx_all = torch.cat(idx_all, dim=2)
 
     if neighbor_type == 'neighbor':
@@ -271,12 +266,14 @@ def select_neighbors_in_separate_key(pcd, coordinate, K, scale, neighbor_selecti
         output = torch.cat([pcd[:, :, None, :], neighbors], dim=3)  # output.shape == (B, N, K, 2C)
     elif neighbor_type == 'center_diff':
         diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
-        output = torch.cat([pcd[:, :, None, :], diff], dim=3)  # output.shape == (B, N, K, 2C)
+        output = torch.cat([pcd.unsqueeze(2).expand(-1, -1, K*(scale+1), -1), diff], dim=3)  # output.shape == (B, N, K, 2C)
     elif neighbor_type == 'neighbor_diff':
-        output = torch.cat([neighbors, neighbors - pcd[:, :, None, :]])  # output.shape == (B, N, K, 2C)
+        diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
+        output = torch.cat([neighbors, neighbors - diff], dim=3)  # output.shape == (B, N, K, 2C)
     elif neighbor_type == 'center_neighbor_diff':
         diff = neighbors - pcd[:, :, None, :]  # diff.shape == (B, N, K, C)
-        output = torch.cat([pcd[:, :, None, :], neighbors, diff], dim=3)  # output.shape == (B, N, K, 3C)
+        output = torch.cat([pcd.unsqueeze(2).expand(-1, -1, K*(scale+1), -1), neighbors, diff],
+                           dim=3)  # output.shape == (B, N, K, 3C)
     else:
         raise ValueError(f'group_type should be "neighbor", "diff", "center_neighbor", "center_diff", '
                          f'"neighbor_diff", "center_neighbor_diff" but got {neighbor_type}')
@@ -337,15 +334,3 @@ class STN(nn.Module):
         x = x.view(batch_size, 3, 3)  # (batch_size, 3*3) -> (batch_size, 3, 3)
 
         return x
-"""
-def operation_mode(operation_mode, query, keys):
-    if operation_mode == 'multiple':
-        attention_maps = [torch.matmul(query.unsqueeze(-3), key.transpose(-1, -2)).softmax(dim=-1) for key in keys]
-    elif operation_mode == 'addition':
-        attention_maps = [(query.unsqueeze(-3) + key.transpose(-1, -2)).softmax(dim=-1) for key in keys]
-    elif operation_mode == 'subtraction':
-        attention_maps = [(query.unsqueeze(-3) - key.transpose(-1, -2)).softmax(dim=-1) for key in keys]
-    else:
-        raise ValueError(f'Unsupported operation mode: {operation_mode}. It should be multiple, addition or '
-                         f'subtraction.')
-"""
